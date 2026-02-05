@@ -1,0 +1,22 @@
+[project]
+name = "ajx"
+description = "titanic_ml example package"
+version = "0.1.0"
+authors = [
+    { name = "Hannes Marklund", email = "hannes.marklund@umu.se" }
+]
+dependencies = [
+    "jax",
+    "flax",
+    "loguru"
+]
+
+
+[project.optional-dependencies]
+dev = [
+
+]
+
+[build-system]
+build-backend = "flit_core.buildapi"
+requires = ["flit_core >=3.2,<4"]
