@@ -18,14 +18,6 @@ class FreeBody(Environment):
         self.use_gyroscopic = use_gyroscopic
 
         self.build_sim()
-        self.control_names = []
-
-        self.default_param = SimulationParameters(
-            jnp.array([0.0, 0.0, 0.0]),
-            self.rb_param,
-            self.constraint_param,
-            sparse_param={},
-        )
 
         super().post_init()
 
@@ -48,28 +40,33 @@ class FreeBody(Environment):
         )
 
         self.body = RigidBody("body", ("box",))
-        self.body_param = RigidBodyParameters.create(
+        body_param = RigidBodyParameters.create(
             mass=1.0, inertia_diag=inertia, name="body"
         )
-        self.rb_param, self.rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
-            [(self.body_param, self.body)]
+        rb_param, rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
+            [(body_param, self.body)]
         )
-        self.constraint_param, self.constraints = (
-            ConstraintParameters.stack_with_constraints([])
-        )
+        constraint_param, constraints = ConstraintParameters.stack_with_constraints([])
 
-        self.pre_step_modifiers = ()
+        pre_step_modifiers = ()
+
+        rotation_encoder = AbsoluteRotationEncoder("rotation_encoder", "body")
+        sensors = (rotation_encoder,)
 
         self.sim = Simulation(
             self.timestep,
-            self.rigid_bodies,
-            self.constraints,
-            self.pre_step_modifiers,
+            rigid_bodies,
+            constraints,
+            sensors,
+            pre_step_modifiers,
             self.use_gyroscopic,
         )
-
-        self.rotation_encoder = AbsoluteRotationEncoder("rotation_encoder", "body")
-        self.sensors = (self.rotation_encoder,)
+        self.default_param = SimulationParameters(
+            jnp.array([0.0, 0.0, 0.0]),
+            rb_param,
+            constraint_param,
+            sparse_param={},
+        )
 
         self.geometry_list = (self.box,)
         self.extra_geometry = (

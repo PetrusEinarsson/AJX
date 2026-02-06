@@ -13,9 +13,8 @@ from ajx.param import SimulationParameters
 class Pendulum(Environment):
     def __init__(
         self,
-        override_param: Dict,
-        timestep: float,
         has_quadratic_damping: bool,
+        timestep: float,
     ):
         self.timestep = timestep
         self.has_quadratic_damping = has_quadratic_damping
@@ -31,8 +30,6 @@ class Pendulum(Environment):
                 "damping": self.damping_param,
             },
         )
-
-        self.param = self.default_param.insert(override_param)
 
         super().post_init()
 
@@ -102,16 +99,18 @@ class Pendulum(Environment):
         if self.has_quadratic_damping:
             self.pre_step_modifiers.append(self.quadratic_damping)
 
+        self.rotary_decoder = RotaryEncoderHingeMounted("rotary_encoder", self.hinge)
+        self.sensors = (self.rotary_decoder,)
+
         self.sim = simulation.Simulation(
             self.timestep,
             self.rigid_bodies,
             self.constraints,
+            self.sensors,
             self.pre_step_modifiers,
             use_gyroscopic=False,
         )
 
-        self.rotary_decoder = RotaryEncoderHingeMounted("rotary_encoder", self.hinge)
-        self.sensors = (self.rotary_decoder,)
         self.geometry_list = (self.pendulum_box,)
         self.extra_geometry = (
             geometry.Square(

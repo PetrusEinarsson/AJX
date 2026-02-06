@@ -1,7 +1,8 @@
 import jax.numpy as jnp
+from ajx.sensors.base import Sensor
 
 
-class RotaryEncoderHingeMounted:
+class RotaryEncoderHingeMounted(Sensor):
     def __init__(self, name: str, hinge):
         self.name = name
         self.hinge = hinge

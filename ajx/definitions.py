@@ -72,6 +72,22 @@ def ajx_dataclass(cls):
         children_dict = {key: val for key, val in zip(dynamic_attr_names, children)}
         return cls(**aux_dict, **children_dict)
 
+    @classmethod
+    def create_empty_stack(
+        cls,
+    ):
+        empty_attrs = {}
+        for key in array_attr_names:
+            # TODO: The dimensions of the array is unkonwn. We just assume that it is
+            # safe to put as zero
+            empty_attrs[key] = jnp.array([0, 0])
+        for key in ajx_attr_names:
+            empty_attrs[key] = globals()[cls.__annotations__[key]].create_empty_stack()
+        for key in str_attr_names:
+            empty_attrs[key] = ()
+
+        return cls(**empty_attrs)
+
     def __hash__(self):
         # TODO: Is this a bad idea?
         vals = tuple(self.__dict__[key] for key in str_attr_names)
@@ -79,6 +95,7 @@ def ajx_dataclass(cls):
 
     cls.stack = stack
     cls.copy = copy
+    cls.create_empty_stack = create_empty_stack
     cls.tree_flatten = tree_flatten
     cls.tree_unflatten = tree_unflatten
     cls.__getitem__ = __getitem__
@@ -192,8 +209,7 @@ class ConstraintParameters:
         param_constraint_pairs: Tuple[Tuple[ConstraintParameters, Any]],
     ):
         if not param_constraint_pairs:
-            data = jnp.zeros([0])
-            return ConstraintParameters(tuple(), data), tuple()
+            return ConstraintParameters.create_empty_stack(), tuple()
         frame_a_stacked = Frame.stack(
             [pair[0].frame_a for pair in param_constraint_pairs]
         )

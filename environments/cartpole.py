@@ -15,15 +15,6 @@ class CartPole(Environment):
         self.build_sim()
         self.control_names = ["motor"]
 
-        self.default_param = SimulationParameters(
-            jnp.array([0.0, -9.82, 0.0]),
-            self.rb_param,
-            self.constraint_param,
-            sparse_param={
-                "motor": self.motor_param,
-            },
-        )
-
         super().post_init()
 
     def get_hyperparam(self):
@@ -54,12 +45,12 @@ class CartPole(Environment):
             color=[0.0, 0.5, 0.5],
         )
 
-        self.cart = RigidBody("cart", ("cart_box",))
-        self.cart_param = RigidBodyParameters.create(
+        cart = RigidBody("cart", ("cart_box",))
+        cart_param = RigidBodyParameters.create(
             mass=0.127, inertia_diag=jnp.array([0.02, 0.02, 0.02]), name="cart"
         )
         self.pendulum = RigidBody("pendulum", ("pendulum_box",))
-        self.pendulum_param = RigidBodyParameters.create(
+        pendulum_param = RigidBodyParameters.create(
             mass=0.5, inertia_diag=jnp.array([0.02, 0.02, 0.02]), name="pendulum"
         )
 
@@ -69,12 +60,12 @@ class CartPole(Environment):
             body_a=None,
             body_b="cart",
         )
-        self.motor_param = GainMotorParameters(0.04, 10.0)
-        self.motor = GainMotor2("motor", self.prismatic, self.timestep, 0)
+        motor_param = GainMotorParameters(0.04, 10.0)
+        motor = GainMotor2("motor", self.prismatic, self.timestep, 0)
         prismatic_direction = math.quat_from_axis_angle(
             jnp.array([0.0, 0.0, 1.0]), jnp.pi / 2
         )
-        self.prismatic_param = ConstraintParameters.create(
+        prismatic_param = ConstraintParameters.create(
             frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), prismatic_direction),
             frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), prismatic_direction),
             compliance=1e-8,
@@ -92,7 +83,7 @@ class CartPole(Environment):
         )
         hinge_world_rotation = math.quat_mul(hinge_cart_rotation, horizontal_rotation)
         self.hinge = HingeJoint(name="hinge", body_a="cart", body_b="pendulum")
-        self.hinge_param = ConstraintParameters.create(
+        hinge_param = ConstraintParameters.create(
             frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), hinge_world_rotation),
             frame_b=Frame(jnp.array([0.0, 1.24, 0.0]), hinge_cart_rotation),
             compliance=1e-8,
@@ -101,31 +92,23 @@ class CartPole(Environment):
             name="hinge",
         )
 
-        self.rb_param, self.rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
+        rb_param, self.rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
             [
-                (self.cart_param, self.cart),
-                (self.pendulum_param, self.pendulum),
+                (cart_param, cart),
+                (pendulum_param, self.pendulum),
             ]
         )
 
-        self.constraint_param, self.constraints = (
+        constraint_param, self.constraints = (
             ConstraintParameters.stack_with_constraints(
                 [
-                    (self.prismatic_param, self.prismatic),
-                    (self.hinge_param, self.hinge),
+                    (prismatic_param, self.prismatic),
+                    (hinge_param, self.hinge),
                 ]
             )
         )
 
-        self.pre_step_modifiers = (self.motor,)
-
-        self.sim = Simulation(
-            self.timestep,
-            self.rigid_bodies,
-            self.constraints,
-            self.pre_step_modifiers,
-            False,
-        )
+        self.pre_step_modifiers = (motor,)
 
         self.distance_sensor = PrismaticEncoder("distance_sensor", self.prismatic)
         self.rotary_encoder = RotaryEncoderHingeMounted("rotary_encoder", self.hinge)
@@ -134,6 +117,25 @@ class CartPole(Environment):
             self.distance_sensor,
             self.rotary_encoder,
         )
+
+        self.sim = Simulation(
+            self.timestep,
+            self.rigid_bodies,
+            self.constraints,
+            self.sensors,
+            self.pre_step_modifiers,
+            False,
+        )
+
+        self.default_param = SimulationParameters(
+            jnp.array([0.0, -9.82, 0.0]),
+            rb_param,
+            constraint_param,
+            sparse_param={
+                "motor": motor_param,
+            },
+        )
+
         self.geometry_list = (self.cart_box, self.pendulum_box)
 
         self.extra_geometry = (

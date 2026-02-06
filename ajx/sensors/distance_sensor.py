@@ -1,7 +1,8 @@
 import jax.numpy as jnp
+from ajx.sensors.base import Sensor
 
 
-class PrismaticEncoder:
+class PrismaticEncoder(Sensor):
     def __init__(self, name: str, prismatic):
         self.name = name
         self.prismatic = prismatic

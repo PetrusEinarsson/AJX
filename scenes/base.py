@@ -50,9 +50,7 @@ class GraphicalEnvironmentBase(DirectObject):
         self.initial_state = initial_state
         self.game = Game(framerate=1 / self.timestep)
 
-        self.force = env.force
         self.step = jit(env.step)
-        self.observe = jit(env.observe)
 
         self.physics_is_active = True
         self.replay_active = False
@@ -89,7 +87,7 @@ class GraphicalEnvironmentBase(DirectObject):
             geometry.name: geometry for geometry in self.environment.geometry_list
         }
         self.hidden_geometry_dict = dict()
-        for rb in self.environment.rigid_bodies:
+        for rb in self.environment.sim.rigid_body_list:
             for g_name in rb.geometry:
                 assert (
                     g_name in self.geometry_dict
@@ -156,6 +154,15 @@ class GraphicalEnvironmentBase(DirectObject):
             style=1,
             fg=(1, 1, 1, 1),
             pos=(0.06, -0.38),
+            align=TextNode.ALeft,
+            scale=0.05,
+            parent=base.a2dTopLeft,
+        )
+        self.text_display_observations4 = OnscreenText(
+            text="",
+            style=1,
+            fg=(1, 1, 1, 1),
+            pos=(0.06, -0.44),
             align=TextNode.ALeft,
             scale=0.05,
             parent=base.a2dTopLeft,
@@ -385,17 +392,19 @@ class GraphicalEnvironmentBase(DirectObject):
             self.update_trajectory()
             self.observation = self.observe(self.state, None, self.env_param)
 
-        info_list = self.environment.get_display_text(self.observation)
+        info_list = self.environment.observation_strings(self.observation)
         if len(info_list) > 0:
             self.text_display_observations1.setText(info_list[0])
         if len(info_list) > 1:
             self.text_display_observations2.setText(info_list[1])
         if len(info_list) > 2:
             self.text_display_observations3.setText(info_list[2])
+        if len(info_list) > 3:
+            self.text_display_observations4.setText(info_list[3])
         # Very slow...
         sim = 2
-        r = (self.counter * sim) % len(self.environment.rigid_bodies)
-        for i, rb in enumerate(self.environment.rigid_bodies):  # [r : r + sim]
+        r = (self.counter * sim) % len(self.environment.sim.rigid_body_list)
+        for i, rb in enumerate(self.environment.sim.rigid_body_list):  # [r : r + sim]
             i = i
             for g_name in rb.geometry:
                 # assert g_name in self.geometry_dict
@@ -414,12 +423,8 @@ class GraphicalEnvironmentBase(DirectObject):
         )
 
     def update_physics(self):
-        qdot_next, ghosts, status = self.force(self.state, -self.u, self.env_param)
         self.last_observation = self.observation
-        self.observation = self.observe(self.state, qdot_next, self.env_param)
-        self.state = self.step(self.state, qdot_next)
-
-        assert status == 0
+        self.state, self.observation = self.step(self.state, -self.u, self.env_param)
 
     def update_trajectory(self):
         if not self.state_sequence is None:

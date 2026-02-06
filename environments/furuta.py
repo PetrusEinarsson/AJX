@@ -3,7 +3,7 @@ import ajx.math as math
 from ajx import *
 from ajx.environment import Environment
 
-from typing import Dict
+from typing import Optional
 import scenes.graphics.geometry as geometry
 
 from ajx.param import SimulationParameters
@@ -23,28 +23,9 @@ class Furuta(Environment):
         self.reference_timestep = reference_timestep
         if not reference_timestep:
             self.reference_timestep = timestep
-        self.com_displacement1 = 0.11
-        self.com_displacement2 = 0.091
-        self.length1 = 0.248
-        self.length2 = 0.395
 
-        self.build_sim()
         self.control_names = ["voltage"]
-
-        # Specification of Maxon 218009
-        # https://www.maxongroup.com/maxon/view/product/motor/dcmotor/re/re40/218009
-        self.default_param = SimulationParameters(
-            jnp.array([0.0, -9.82, 0.0]),
-            self.rb_param,
-            self.constraint_param,
-            sparse_param={
-                "electric_motor": self.electric_motor_param,
-                "gravity": TiltGravityParam(
-                    jnp.array([0.0, -9.82, 0.0]),
-                    jnp.array([1.0, 0.0, 0.0, 0.0]),
-                ),
-            },
-        )
+        self._build_sim()
 
         super().post_init()
 
@@ -71,28 +52,33 @@ class Furuta(Environment):
         }
         return {name: pname_mapping.get(name, name) for name in pnames}
 
-    def build_sim(self):
-        self.arm1_inertia = AxisSymmetricInertia("arm1_inertia", "arm1", False, "yxx")
-        self.arm1_inertia_param = AxisSymmetricInertiaParam(0.012, 1e-4)
+    def _build_sim(self):
+        com_displacement1 = 0.11
+        com_displacement2 = 0.091
+        length1 = 0.248
+        length2 = 0.395
 
-        self.arm2_inertia = AxisSymmetricInertia("arm2_inertia", "arm2", False, "xyx")
-        self.arm2_inertia_param = AxisSymmetricInertiaParam(0.0016, 1e-4)
+        arm1_inertia = AxisSymmetricInertia("arm1_inertia", "arm1", False, "yxx")
+        arm1_inertia_param = AxisSymmetricInertiaParam(0.012, 1e-4)
 
-        self.arm1_box = geometry.Model(
-            "arm1_box", "arm1.bam", translation=(-self.com_displacement1, 0.0, 0.0)
+        arm2_inertia = AxisSymmetricInertia("arm2_inertia", "arm2", False, "xyx")
+        arm2_inertia_param = AxisSymmetricInertiaParam(0.0016, 1e-4)
+
+        arm1_box = geometry.Model(
+            "arm1_box", "arm1.bam", translation=(-com_displacement1, 0.0, 0.0)
         )
-        self.arm2_box = geometry.Model(
-            "arm2_box", "arm2.bam", translation=(0.0, self.com_displacement2, 0.0)
+        arm2_box = geometry.Model(
+            "arm2_box", "arm2.bam", translation=(0.0, com_displacement2, 0.0)
         )
 
-        self.arm1 = RigidBody("arm1", ("arm1_box",))
-        self.arm1_param = RigidBodyParameters.create(
+        arm1 = RigidBody("arm1", ("arm1_box",))
+        arm1_param = RigidBodyParameters.create(
             mass=0.428,
             inertia_diag=jnp.array([1e-6, 0.012, 0.012]),
             name="arm1",
         )
-        self.arm2 = RigidBody("arm2", ("arm2_box",))
-        self.arm2_param = RigidBodyParameters.create(
+        arm2 = RigidBody("arm2", ("arm2_box",))
+        arm2_param = RigidBodyParameters.create(
             mass=0.238, inertia_diag=jnp.array([0.0016, 1e-6, 0.0016]), name="arm2"
         )
 
@@ -106,74 +92,81 @@ class Furuta(Environment):
         rotation2 = math.quat_from_axis_angle(jnp.array([1.0, 0.0, 0.0]), -0.0 * jnp.pi)
         rotation3 = rotation2
 
-        self.electric_motor_param = GainMotorParameters(0.0004, 7.5)  # 0.00265, 0.0039
-        self.electric_motor = GainMotor2(
-            "electric_motor", self.hinge1, self.timestep, 0
-        )
+        electric_motor_param = GainMotorParameters(0.0004, 7.5)  # 0.00265, 0.0039
+        electric_motor = GainMotor2("electric_motor", self.hinge1, self.timestep, 0)
         # self.electric_motor = TargetSpeedMotor("electric_motor", "hinge1_motor", 0)
 
-        self.hinge1_param = ConstraintParameters.create(
+        hinge1_param = ConstraintParameters.create(
             frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), rotation1),
-            frame_b=Frame(jnp.array([-self.com_displacement1, 0.0, 0.0]), rotation1),
+            frame_b=Frame(jnp.array([-com_displacement1, 0.0, 0.0]), rotation1),
             compliance=1e-5,
             damping=2 * self.reference_timestep,
             b=4e-6,
             name="hinge1",
         )
 
-        self.com_to_rod_end1 = self.length1 - self.com_displacement1
-        self.com_to_rod_end2 = self.length2 - self.com_displacement2
+        com_to_rod_end1 = length1 - com_displacement1
+        com_to_rod_end2 = length2 - com_displacement2
 
         self.hinge2 = HingeJoint(
             name="hinge2",
             body_a="arm1",
             body_b="arm2",
         )
-        self.hinge2_param = ConstraintParameters.create(
-            frame_a=Frame(jnp.array([self.com_to_rod_end1, 0.0, 0.0]), rotation3),
-            frame_b=Frame(jnp.array([0, self.com_displacement2, 0.0]), rotation2),
+        hinge2_param = ConstraintParameters.create(
+            frame_a=Frame(jnp.array([com_to_rod_end1, 0.0, 0.0]), rotation3),
+            frame_b=Frame(jnp.array([0, com_displacement2, 0.0]), rotation2),
             compliance=1e-5,
             damping=2 * self.reference_timestep,
             b=0.0003,
             name="hinge2",
         )
 
-        self.rb_param, self.rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
+        rb_param, rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
             [
-                (self.arm1_param, self.arm1),
-                (self.arm2_param, self.arm2),
+                (arm1_param, arm1),
+                (arm2_param, arm2),
             ]
         )
 
-        self.constraint_param, self.constraints = (
-            ConstraintParameters.stack_with_constraints(
-                [
-                    (self.hinge1_param, self.hinge1),
-                    (self.hinge2_param, self.hinge2),
-                ]
-            )
+        constraint_param, constraints = ConstraintParameters.stack_with_constraints(
+            [
+                (hinge1_param, self.hinge1),
+                (hinge2_param, self.hinge2),
+            ]
         )
 
-        self.tilt_gravity = TiltGravity("gravity")
+        pre_step_modifiers = (electric_motor,)
 
-        self.pre_step_modifiers = (
-            self.electric_motor,
-            # self.tilt_gravity,
-        )
+        rotary_decoder1 = RotaryEncoderHingeMounted("rotary_encoder1", self.hinge1)
+        rotary_decoder2 = RotaryEncoderHingeMounted("rotary_encoder2", self.hinge2)
+
+        sensors = (rotary_decoder1, rotary_decoder2)
 
         self.sim = Simulation(
             self.timestep,
-            self.rigid_bodies,
-            self.constraints,
-            self.pre_step_modifiers,
+            rigid_bodies,
+            constraints,
+            sensors,
+            pre_step_modifiers,
             self.use_gyroscopic,
         )
+        # Specification of Maxon 218009
+        # https://www.maxongroup.com/maxon/view/product/motor/dcmotor/re/re40/218009
+        self.default_param = SimulationParameters(
+            jnp.array([0.0, -9.82, 0.0]),
+            rb_param,
+            constraint_param,
+            sparse_param={
+                "electric_motor": electric_motor_param,
+                "gravity": TiltGravityParam(
+                    jnp.array([0.0, -9.82, 0.0]),
+                    jnp.array([1.0, 0.0, 0.0, 0.0]),
+                ),
+            },
+        )
 
-        self.rotary_decoder1 = RotaryEncoderHingeMounted("rotary_encoder1", self.hinge1)
-        self.rotary_decoder2 = RotaryEncoderHingeMounted("rotary_encoder2", self.hinge2)
-
-        self.sensors = (self.rotary_decoder1, self.rotary_decoder2)
-        self.geometry_list = (self.arm1_box, self.arm2_box)
+        self.geometry_list = (arm1_box, arm2_box)
 
         self.extra_geometry = [
             geometry.Square(

@@ -11,12 +11,15 @@ from ajx.definitions import (
 )
 from ajx.pre_step_modifiers import PreStepModifier
 from ajx.constraints import Constraint
+from ajx.sensors import Sensor
 from typing import Dict, List, Tuple, Optional
 from loguru import logger
 
 from ajx.block_sparse.csc_ldlt import ldlt_solve
 from ajx.block_sparse.vbc_matrix import VBCMatrix
 from ajx.block_sparse.vbr_matrix import VBRMatrix
+from ajx.param import SimulationParameters
+from ajx.definitions import RigidBodyParameters
 
 from flax import struct
 from functools import partial
@@ -50,10 +53,10 @@ class Simulation:
 
     Methods
     -------
-    force:
+    pre_step:
         Returns the velocity update, multipliers and solver state given the system's
         state, parameters and control signal.
-    step:
+    post_step:
         Update the state using the given velocity update.
     inverse_dynamics:
         Solve for the forces to step from one state to a target state.
@@ -62,6 +65,7 @@ class Simulation:
     timestep: float
     rigid_body_list: Tuple[RigidBody]
     constraint_list: Tuple[Constraint]
+    sensor_list: Tuple[Sensor]
     pre_step_modifiers: Tuple[PreStepModifier]
     use_gyroscopic: bool
 
@@ -70,8 +74,8 @@ class Simulation:
         return 1 / self.timestep
 
     @partial(jit, static_argnums=0)
-    def force(
-        self, state: State, u: jax.Array, param: Dict
+    def pre_step(
+        self, state: State, u: jax.Array, param: SimulationParameters
     ) -> Tuple[Dict[str, jax.Array], jax.Array, int]:
         """
         Returns the velocity update, multipliers and solver state given the system's
@@ -83,8 +87,8 @@ class Simulation:
             The system's state.
         u: jax.Array
             The current control signal.
-        param: Dict
-            The system's parameters stored as a jax pytree with a dictionary at the top level.
+        param: SimulationParameters
+            The system's parameters.
 
         Returns:
         -------
@@ -99,10 +103,10 @@ class Simulation:
             param = param.insert(component.update_params(state, u, param))
         f_ext = self._gravity_gyro_force3D(state, param)
 
-        return self.force_solver(state, f_ext, param)
+        return self._force_solver(state, f_ext, param)
 
     @partial(jit, static_argnums=0)
-    def step(self, state: State, gvel_next: GeneralizedVelocity) -> State:
+    def post_step(self, state: State, gvel_next: GeneralizedVelocity) -> State:
         """
         Update the state using the given velocity update.
 
@@ -110,8 +114,9 @@ class Simulation:
         ----------
         state: State
             The system's state.
-        qdot_next: Dict[]
-            The velocity update as a dictionary of jax arrays.
+        gvel_next: GeneralizedVelocity
+            The velocity update
+            TODO: Should be replaced with the full result from pre_step (intermediates)
 
         Returns:
         -------
@@ -138,16 +143,43 @@ class Simulation:
 
         return state_next
 
+    def observe(
+        self, state: State, gvel_next: GeneralizedVelocity, param: SimulationParameters
+    ) -> jax.Array:
+        """
+        Observe the state using the simulation sensors
+
+        Parameters
+        ----------
+        state: State
+            The system's state.
+        gvel_next: GeneralizedVelocity
+            The velocity update
+            TODO:  Should be replaced with the full result from pre_step (intermediates)
+
+        Returns:
+        -------
+        jax.Array:
+            An flat array containing all observations in the same order as the simulation sensors.
+        """
+
+        observation_list = [jnp.zeros([0])]
+        for sensor in self.sensor_list:
+            observation = sensor.observe(state, gvel_next, param)
+            observation_list.append(observation)
+
+        return jnp.concatenate(observation_list)
+
     @partial(jit, static_argnums=0)
     def inverse_dynamics(
         self,
         state: State,
-        qdot_target: GeneralizedVelocity,
-        u: jax.Array,
-        param: Dict,
-    ) -> Tuple[jax.Array, jax.Array]:
+        gvel_target: GeneralizedVelocity,
+        action: jax.Array,
+        param: SimulationParameters,
+    ) -> jax.Array:
         """
-        Solve for the forces to step from one state to a target state.
+        Solve for the force(s) required to step from one state to a target velocity.
 
         Parameters
         ----------
@@ -155,11 +187,16 @@ class Simulation:
             The system's state.
         target_state: State
             The target state to be reached.
-        param: Dict
+        param: SimulationParameters
             The system's parameters stored as a jax pytree with a dictionary at the top level.
+
+        Returns:
+        -------
+        jax.Array:
+            An array containing the required force(s).
         """
         for component in self.pre_step_modifiers:
-            param = param.insert(component.update_params(state, u, param))
+            param = param.insert(component.update_params(state, action, param))
 
         f_ext = self._gravity_gyro_force3D(state, param)
         M_stacked, _, G, Sigma_data, b_data, _ = self._assemble_blocks(state, param)
@@ -167,10 +204,10 @@ class Simulation:
         # M = jax.scipy.linalg.block_diag(*M_stacked)
 
         # lbda = 1 / Sigma_data * (b_data - G.mul_vector(qdot_target.data.flatten()))
-        lbda = 1 / Sigma_data * (b_data - G_dense @ qdot_target.data.flatten())
+        lbda = 1 / Sigma_data * (b_data - G_dense @ gvel_target.data.flatten())
 
         M_vdelta = jax.vmap(jnp.matmul)(
-            M_stacked, qdot_target.data - state.gvel.data
+            M_stacked, gvel_target.data - state.gvel.data
         ).flatten()
         # p_ext = M_vdelta - G.vector_mul(lbda)
         p_ext = M_vdelta - G_dense.T @ lbda
@@ -179,28 +216,9 @@ class Simulation:
 
         return delta
 
-    def momentaneous_inverse_dynamics(
-        self,
-        state: State,
-        qdot_target: jax.Array,
-        u: jax.Array,
-        param: Dict,
-    ) -> Tuple[State, jnp.array, int]:
-        for modifier in self.pre_step_modifiers:
-            param = param.insert(modifier.update_params(state, u, param))
-
-        qdot_delta = qdot_target.data - state.gvel.data
-        M_stacked, _, G, Sigma_data, _, _ = self._assemble_blocks(state, param)
-        G_dense = G.to_scalar_matrix()
-        M_vdelta = jax.vmap(jnp.matmul)(M_stacked, qdot_delta).flatten()
-
-        lbda = -1 / Sigma_data * (G_dense @ qdot_delta.flatten())
-        p_ext = M_vdelta - G_dense.T @ lbda
-
-        return p_ext
-
     @partial(jit, static_argnums=0)
     def _gravity_gyro_force3D(self, state, param):
+        """Compute the external force to apply to each rigid body"""
         g = param.gravity
 
         def force_per_body(rb_param, state):
@@ -227,9 +245,9 @@ class Simulation:
         return gforces
 
     @partial(jit, static_argnums=0)
-    def force_solver(
-        self, state: State, f_ext: jnp.array, param: Dict
-    ) -> Tuple[State, jnp.array, int]:
+    def _force_solver(
+        self, state: State, f_ext: jax.Array, param: SimulationParameters
+    ) -> Tuple[Tuple[State, jax.Array], int]:
         """
         Assemble and solve an MLCP on the form
 
@@ -280,11 +298,15 @@ class Simulation:
 
         code = 0
         gvel_next = GeneralizedVelocity(qdot_next.reshape(-1, 6))
-        return gvel_next, lbda, code
+        return (gvel_next, lbda), code
 
     @partial(jit, static_argnums=0)
-    def assemble_mass_matrix(self, state, param):
-        def assemble_mass_block(rb_param, rot):
+    def _assemble_mass_matrix(
+        self, state: State, param: SimulationParameters
+    ) -> Tuple[jax.Array, jax.Array]:
+        def assemble_mass_block(
+            rb_param: RigidBodyParameters, rot: jax.Array
+        ) -> Tuple[jax.Array, jax.Array]:
             m = rb_param.mass
             J = rb_param.inertia
             R = jit(math.rotation_matrix)(rot)
@@ -306,8 +328,7 @@ class Simulation:
     def _assemble_blocks(
         self,
         state: State,
-        param: Dict,
-        impulse: bool = False,
+        param: SimulationParameters,
     ) -> Tuple[State, jnp.array, int]:
         """
         Assemble the blocks in the saddle point system
@@ -325,7 +346,7 @@ class Simulation:
 
         h_inv = self.h_inv
 
-        M, M_inv = self.assemble_mass_matrix(state, param)
+        M, M_inv = self._assemble_mass_matrix(state, param)
 
         # Sort constraint_list into multiple lists where the number of dofs are the same
         # Group constraints based on their structure. If consecutive constraints have the same structure, they are grouped
@@ -473,6 +494,7 @@ class Simulation:
         b_data,
         lower=True,
     ):
+        """Form S = G @ M_inv @ G.T + Sigma as a VBCMatrix"""
         (
             schur_size,
             row_indices,
