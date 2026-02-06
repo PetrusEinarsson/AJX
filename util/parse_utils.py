@@ -38,8 +38,6 @@ def parse_args(**override_args):
     import jax
     import jax.numpy
     import flax
-    import jaxopt
-    import xarray
 
     logger.info("Parsing arguments")
 
