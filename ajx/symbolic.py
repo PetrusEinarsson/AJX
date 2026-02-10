@@ -1,6 +1,6 @@
 import numpy as np
 from ajx.constraints import Constraint
-from ajx.definitions import RigidBody
+from ajx.definitions import RigidBody, ComponentNotFoundException
 from typing import Tuple
 
 
@@ -78,33 +78,27 @@ def get_constraint_sparsity(
     row_sizes = np.array([c.dof for c in constraint_list])
     col_sizes = np.ones(nb, dtype=int) * 6
 
-    G_rsi_dict = {}
+    G_rsi_dict = (
+        {}
+    )  # Maps the row (constraint_id) and column (body_id) to the correct location in memory
     col_indices = []
     row_ptr = [0]
     cumulative_pos = 0
     counter = 0
     for row in range(nc):
         constraint = constraint_list[row]
-        if constraint.body_a in rigid_body_names:
-            body_a_id = rigid_body_names.index(constraint.body_a)
-        else:
-            body_a_id = None
-        if constraint.body_b in rigid_body_names:
-            body_b_id = rigid_body_names.index(constraint.body_b)
-        else:
-            body_b_id = None
-        if not constraint.is_attached_to_world:
-            col_indices.append(body_a_id)
-            col_indices.append(body_b_id)
-            G_rsi_dict[(row, body_a_id)] = cumulative_pos
-            G_rsi_dict[(row, body_b_id)] = cumulative_pos + 6 * row_sizes[row]
-            cumulative_pos += 12 * row_sizes[row]
-            counter += 2
-        else:
-            col_indices.append(body_b_id)
-            G_rsi_dict[(row, body_b_id)] = cumulative_pos
+        body_ids = []
+        for body in constraint.bodies:
+            if body not in rigid_body_names:
+                raise ComponentNotFoundException
+            body_ids.append(rigid_body_names.index(body))
+
+        for i, body_id in enumerate(body_ids):
+            col_indices.append(body_id)
+            G_rsi_dict[(row, body_id)] = cumulative_pos
             cumulative_pos += 6 * row_sizes[row]
             counter += 1
+
         row_ptr.append(counter)
 
     G_sparsity_pattern = (

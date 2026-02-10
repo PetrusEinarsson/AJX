@@ -74,10 +74,11 @@ class Furuta(Environment):
         )
 
         # enable_motor = not self.no_motor
-        self.hinge1 = HingeJoint(
+        self.hinge1 = OneBodyConstraint(
             name="hinge1",
-            body_a=None,
-            body_b="arm1",
+            # body_a=None,
+            body="arm1",
+            constraint_type=ConstraintType.HINGE.value,
         )
         rotation1 = math.quat_from_axis_angle(jnp.array([0.0, 0.0, 1.0]), 0.5 * jnp.pi)
         rotation2 = math.quat_from_axis_angle(jnp.array([1.0, 0.0, 0.0]), -0.0 * jnp.pi)
@@ -101,10 +102,11 @@ class Furuta(Environment):
         com_to_rod_end1 = length1 - com_displacement1
         com_to_rod_end2 = length2 - com_displacement2
 
-        self.hinge2 = HingeJoint(
+        self.hinge2 = TwoBodyConstraint(
             name="hinge2",
             body_a="arm1",
             body_b="arm2",
+            constraint_type=ConstraintType.HINGE.value,
         )
         hinge2_param = ConstraintParameters.create(
             frame_a=Frame(jnp.array([com_to_rod_end1, 0.0, 0.0]), rotation3),

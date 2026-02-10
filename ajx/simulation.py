@@ -10,7 +10,7 @@ from ajx.definitions import (
     GeneralizedVelocity,
 )
 from ajx.pre_step_modifiers import PreStepModifier
-from ajx.constraints import Constraint
+from ajx.constraints import TwoBodyConstraint, OneBodyConstraint
 from ajx.sensors import Sensor
 from typing import Dict, List, Tuple, Optional
 from loguru import logger
@@ -214,7 +214,7 @@ class Simulation:
             param = param.insert(component.update_params(state, action, param))
 
         f_ext = self._gravity_gyro_force3D(state, param)
-        M_stacked, _, G, Sigma_data, b_data, _ = self._assemble_blocks(state, param)
+        M_stacked, _, G, Sigma_data, b_data = self._assemble_blocks(state, param)
         G_dense = G.to_scalar_matrix()
         # M = jax.scipy.linalg.block_diag(*M_stacked)
 
@@ -263,26 +263,11 @@ class Simulation:
     def _force_solver(
         self, state: State, f_ext: jax.Array, param: SimulationParameters
     ) -> Tuple[Tuple[State, jax.Array], int]:
-        """
-        Assemble and solve an MLCP on the form
-
-        | M   -G.T   -C.T ||  v   |   | a |   | 0 |
-        |                 ||      |   |   |   |   |
-        | G   Sigma   0   || lbda | = | b | + | 0 |
-        |                 ||      |   |   |   |   |
-        | C    0    Gamma ||  nu  |   | c |   | w |
-
-        where nu^T w = 0 and nu >= 0, w >= 0.
-
-        We first reduce it to an LCP using Schur complement operations (LDLT factorization).
-        The resulting LCP is then solved using Lemke's algorithm. Finally, the
-        results are substituded back to get the velocity update.
-        """
 
         logger.trace("Tracing force_solver")
         gvel = state.gvel.data.flatten()
 
-        M_stacked, M_inv_stacked, G, Sigma_data, b_data, _ = self._assemble_blocks(
+        M_stacked, M_inv_stacked, G, Sigma_data, b_data = self._assemble_blocks(
             state, param
         )
 
@@ -346,7 +331,7 @@ class Simulation:
         self,
         state: State,
         param: SimulationParameters,
-    ) -> Tuple[State, jnp.array, int]:
+    ) -> Tuple[jax.Array, jax.Array, VBRMatrix, jax.Array, jax.Array]:
         """
         Assemble the blocks in the saddle point system
 
@@ -354,26 +339,18 @@ class Simulation:
         |           ||      |   |   |
         | G   Sigma || lbda | = | b |
 
+        and return M, M_inv, G, Sigma, b
         """
-        G_sparsity_pattern = get_constraint_sparsity(
-            self.rigid_body_list,
-            self.constraint_list,
-            param.rigid_body_param.names,
-        )
-
-        h_inv = self.h_inv
-
-        M, M_inv = self._assemble_mass_matrix(state, param)
-
         # Sort constraint_list into multiple lists where the number of dofs are the same
-        # Group constraints based on their structure. If consecutive constraints have the same structure, they are grouped
+        # Group constraints based on their structure. If consecutive constraints have the same structure, they are grouped.
+        # Constraint groups are evaluated in parallel. Note
         constraint_group_list = []
         group = []
         first_id = 0
         previous_identifier = None
         for i, constraint in enumerate(self.constraint_list):
             # To be expanded
-            identifier = "6x1" if constraint.is_attached_to_world else "6x2"
+            identifier = constraint.__class__.__name__
             if not identifier == previous_identifier:
                 if previous_identifier:
                     constraint_group_list.append((previous_identifier, first_id, group))
@@ -384,6 +361,7 @@ class Simulation:
         if self.constraint_list:
             constraint_group_list.append((identifier, first_id, group))
 
+        # Use constraint graph to compute sparsity information
         (
             G_size,
             G_col_indices,
@@ -391,8 +369,11 @@ class Simulation:
             G_row_sizes,
             G_col_sizes,
             G_rsi,
-        ) = G_sparsity_pattern
-
+        ) = get_constraint_sparsity(
+            self.rigid_body_list,
+            self.constraint_list,
+            param.rigid_body_param.names,
+        )
         G_rsi_list = list(G_rsi.values())
         G_row_indices = np.cumsum(G_row_sizes) - G_row_sizes
         G_data = jnp.zeros(G_size)
@@ -400,70 +381,87 @@ class Simulation:
         b_data = jnp.zeros(sum(G_row_sizes))
         row_slice_begin = 0
 
+        # Assemble mass matrices
+        M, M_inv = self._assemble_mass_matrix(state, param)
+
+        # Loop over each constraint group. If the number of groups are kept low, the
+        # fact that a regular for-loop is used should not matter much
         for identifier, first_index, constraint_group in constraint_group_list:
-            body_a_ids = [
-                (
-                    param.rigid_body_param.names.index(constraint.body_a)
-                    if constraint.body_a in param.rigid_body_param.names
-                    else -1
-                )
-                for constraint in constraint_group
-            ]
-            body_b_ids = [
-                param.rigid_body_param.names.index(constraint.body_b)
-                for constraint in constraint_group
-            ]
-            constraint_ids = [
-                param.constraint_param.names.index(constraint.name)
-                for constraint in constraint_group
-            ]
-            constraint_types = [
-                (type(constraint).__name__ == "PrismaticJoint") * 1
-                for constraint in constraint_group
-            ]
-            group_size = len(constraint_group)
-            idx_slice = slice(first_index, first_index + group_size)
-            jac_func = {
-                "6x2": Constraint.multi_jacobian6x2,
-                "6x1": Constraint.multi_jacobian6x1,
+            # These dicts are required if we want to replace the for-loop above with a jax.lax loop
+            n_bodies = {
+                "TwoBodyConstraint": TwoBodyConstraint.get_num_bodies(),
+                "OneBodyConstraint": OneBodyConstraint.get_num_bodies(),
             }
             c_func = {
-                "6x2": Constraint.multi_constraint_func6x2,
-                "6x1": Constraint.multi_constraint_func6x1,
+                "TwoBodyConstraint": TwoBodyConstraint.func,
+                "OneBodyConstraint": OneBodyConstraint.func,
+            }
+            jac_func = {
+                "TwoBodyConstraint": TwoBodyConstraint.jacobian,
+                "OneBodyConstraint": OneBodyConstraint.jacobian,
             }
 
-            G_blocks = jax.vmap(jac_func[identifier], (None, None, 0, 0, 0, 0))(
-                param,
-                state,
-                jnp.array(body_a_ids),
-                jnp.array(body_b_ids),
-                jnp.array(constraint_ids),
-                jnp.array(constraint_types),
+            # Get the body indices (integers) from body names (strings)
+            body_ids = tuple(
+                jnp.array(
+                    [
+                        param.rigid_body_param.names.index(constraint.bodies[i])
+                        for constraint in constraint_group
+                    ]
+                )
+                for i in range(n_bodies[identifier])
             )
-            default_offsets = jax.vmap(c_func[identifier], (None, None, 0, 0, 0, 0))(
-                param,
-                state,
-                jnp.array(body_a_ids),
-                jnp.array(body_b_ids),
-                jnp.array(constraint_ids),
-                jnp.array(constraint_types),
+            # Get the constraint indices (integers) from constraint names (strings)
+            constraint_ids = jnp.array(
+                [
+                    param.constraint_param.names.index(constraint.name)
+                    for constraint in constraint_group
+                ]
+            )
+            # Stack constraint types as a jnp.array
+            constraint_types = jnp.array(
+                [constraint.constraint_type for constraint in constraint_group]
             )
 
+            # Compute Jacobians and constraint offsets
+            G_blocks = jax.vmap(jac_func[identifier], (None, None, 0, 0, 0))(
+                param,
+                state,
+                body_ids,
+                constraint_ids,
+                constraint_types,
+            )
+            default_offsets = jax.vmap(c_func[identifier], (None, None, 0, 0, 0))(
+                param,
+                state,
+                body_ids,
+                constraint_ids,
+                constraint_types,
+            )
+
+            # Copy the Jacobian data from the constraint group to the full Jacobian
             ptr = G_rsi_list[G_row_ptr[first_index]]
             row_slice_begin = G_row_indices[first_index]
             G_data = G_data.at[ptr : ptr + G_blocks.flatten().shape[0]].set(
                 G_blocks.flatten()
             )
 
+            # Get the index slice corresponding to this constraint group
+            # This slice is used to constraint parameters
+            group_size = len(constraint_group)
+            idx_slice = slice(first_index, first_index + group_size)
+
+            # Get the constraint parameters
             tau = param.constraint_param.damping[idx_slice]
             epsilon = param.constraint_param.compliance[idx_slice]
             target = param.constraint_param.target[idx_slice]
             viscous_compliance = epsilon
-            alpha = 1 / (1 + 4 * tau * h_inv)
-            holonomic_regularization = 4 * epsilon * h_inv**2 * alpha
-            nonholonomic_regularization = viscous_compliance * h_inv
-            is_locked = tau > 0.0
-            not_locked = jnp.logical_not(is_locked)
+            alpha = 1 / (1 + 4 * tau * self.h_inv)
+            holonomic_regularization = 4 * epsilon * self.h_inv**2 * alpha
+            nonholonomic_regularization = viscous_compliance * self.h_inv
+
+            not_locked = param.constraint_param.is_velocity[idx_slice]
+            is_locked = jnp.logical_not(not_locked)
 
             offsets = default_offsets - target
 
@@ -472,34 +470,30 @@ class Simulation:
                 + nonholonomic_regularization * not_locked
             )
 
+            # Copy regularization of this constraint group to the full regularization vector
             row_slice_end = row_slice_begin + 6 * group_size
-
             Sigma_data = Sigma_data.at[row_slice_begin:row_slice_end].set(
                 regularization.flatten()
             )
 
-            proj_vel_b = jax.vmap(jnp.matmul)(
-                G_blocks[:, 1], state.gvel.data[jnp.array(body_b_ids)]
+            # Compute Jacobian times velocity
+            jnp_body_ids = jnp.stack(body_ids, axis=1)
+            proj_vels = jax.vmap(jax.vmap(jnp.matmul))(
+                G_blocks, state.gvel.data[jnp_body_ids]
             )
-            proj_vel = proj_vel_b
-            if identifier == "6x2":
-                proj_vel_a = jax.vmap(jnp.matmul)(
-                    G_blocks[:, 0], state.gvel.data[jnp.array(body_a_ids)]
-                )
-                proj_vel = proj_vel_a + proj_vel_b
+            proj_vel = jnp.sum(proj_vels, axis=1)
 
-            rhs_holonomic = -4 * h_inv * alpha * offsets + alpha * proj_vel
+            # Compute the rhs vector
+            rhs_holonomic = -4 * self.h_inv * alpha * offsets + alpha * proj_vel
             rhs_velocity = target
-
             rhs = rhs_holonomic * is_locked + rhs_velocity * not_locked
 
+            # Copy rhs of this constraint group to the full rhs vector
             b_data = b_data.at[row_slice_begin:row_slice_end].set(rhs.flatten())
 
         G = VBRMatrix(G_data, G_col_indices, G_row_ptr, G_row_sizes, G_col_sizes)
-        # G = GVBRMatrix(G_data, G_col_indices, G_row_ptr, (13, 4), (10,), (6, 1), (6,))
-        # G_vbr = G.to_vbr_matrix()
-        # pass
-        return M, M_inv, G, Sigma_data, b_data, 0
+
+        return M, M_inv, G, Sigma_data, b_data
 
     def _assemble_schur(
         self,

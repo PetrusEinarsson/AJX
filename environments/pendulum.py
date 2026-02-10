@@ -58,10 +58,10 @@ class Pendulum(Environment):
             [(self.pendulum_param, self.pendulum)]
         )
 
-        self.hinge = HingeJoint(
+        self.hinge = OneBodyConstraint(
             name="hinge",
-            body_a=None,
-            body_b="pendulum",
+            body="pendulum",
+            constraint_type=ConstraintType.HINGE.value,
         )
 
         frame_rotation = math.quat_from_axis_angle(jnp.array([0.0, 0.0, 1.0]), 0.0)

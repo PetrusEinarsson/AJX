@@ -54,10 +54,10 @@ class CartPole(Environment):
         )
 
         # Prismatic
-        self.prismatic = PrismaticJoint(
+        self.prismatic = OneBodyConstraint(
             name="prismatic",
-            body_a=None,
-            body_b="cart",
+            body="cart",
+            constraint_type=ConstraintType.PRISMATIC.value,
         )
         motor_param = GainMotorParameters(0.04, 10.0)
         motor = GainMotor2("motor", self.prismatic, sim_settings.timestep, 0)
@@ -81,7 +81,12 @@ class CartPole(Environment):
             jnp.array([0.0, 1.0, 0.0]), track_angle
         )
         hinge_world_rotation = math.quat_mul(hinge_cart_rotation, horizontal_rotation)
-        self.hinge = HingeJoint(name="hinge", body_a="cart", body_b="pendulum")
+        self.hinge = TwoBodyConstraint(
+            name="hinge",
+            body_a="cart",
+            body_b="pendulum",
+            constraint_type=ConstraintType.HINGE.value,
+        )
         hinge_param = ConstraintParameters.create(
             frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), hinge_world_rotation),
             frame_b=Frame(jnp.array([0.0, 1.24, 0.0]), hinge_cart_rotation),

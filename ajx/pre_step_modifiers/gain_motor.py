@@ -58,10 +58,23 @@ class GainMotor2(PreStepModifier):
         self.constraint = constraint
         self.timestep = timestep
         self.idx = idx
+        self.target_dof = 5
 
     def update_params(self, state, u, param):
-        jac = self.constraint.tangential_projection(param, state)
-        omega = sum([val @ state.gvel.data[body] for body, val in jac.items()])
+        body_ids = tuple(
+            param.rigid_body_param.names.index(body) for body in self.constraint.bodies
+        )
+        constraint_id = param.constraint_param.names.index(self.constraint.name)
+        jac = self.constraint.__class__.jacobian(
+            param, state, body_ids, constraint_id, self.constraint.constraint_type
+        )
+        # jac = self.constraint.jacobian(param, state) # TODO: Why is this not working?
+        omega = sum(
+            [
+                val[self.target_dof, None] @ state.gvel.data[body]
+                for body, val in zip(body_ids, jac)
+            ]
+        )
 
         speed = (
             omega[0]

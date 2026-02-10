@@ -140,6 +140,10 @@ def ajx_dataclass(cls):
     return cls
 
 
+class ComponentNotFoundException(Exception):
+    pass
+
+
 @ajx_dataclass
 class Frame:
     position: jnp.array
