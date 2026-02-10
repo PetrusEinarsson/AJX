@@ -31,7 +31,6 @@ import array
 from panda3d.core import Quat
 from panda3d.core import TextNode
 import scipy
-from util.deepinsert import deepinsert
 from loguru import logger
 
 

@@ -5,7 +5,6 @@ from ajx.simulation import SimulationSettings
 from ajx.definitions import RigidBodyParameters, RigidBody
 from ajx.environment import Environment
 
-from util.deepinsert import deepinsert
 import scenes.graphics.geometry as geometry
 
 from typing import Dict

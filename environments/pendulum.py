@@ -2,7 +2,6 @@ import jax.numpy as jnp
 from ajx.environment import Environment
 import ajx.simulation as simulation
 from ajx import *
-from util.deepinsert import deepinsert
 
 from typing import Dict
 import scenes.graphics.geometry as geometry
