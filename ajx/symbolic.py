@@ -5,17 +5,18 @@ from typing import Tuple
 
 
 def get_schur_fillin_sparsity(constraint_list: Tuple[Constraint], lower: bool = True):
-    constraint_node = [(i, c.body_a, c.body_b) for i, c in enumerate(constraint_list)]
+    constraint_node = [(i, c.bodies) for i, c in enumerate(constraint_list)]
 
+    # Pre-Step 1: Create a directed constraint-body graph, represented as a dict
     edges_directed_map = {}
-    for i, a, b in constraint_node:
+    for i, bodies_inner in constraint_node:
         edges_directed_map[i] = []
-        for j, c, d in constraint_node:
+        for j, bodies_outer in constraint_node:
             if i == j:
                 continue
             if i > j and lower:
                 continue
-            if a == c or b == c or a == d or b == d:
+            if set(bodies_inner).intersection(bodies_outer):
                 edges_directed_map[i].append(j)
 
     # Pre-Step 2: Compute column sparsity pattern
