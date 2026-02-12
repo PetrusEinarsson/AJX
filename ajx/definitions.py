@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+from jax import vmap
 from typing import Callable, List, Tuple, Any, Dict
 from dataclasses import dataclass, field
 from jax.tree_util import register_pytree_node_class
