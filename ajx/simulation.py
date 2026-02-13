@@ -231,6 +231,43 @@ class Simulation:
 
         return delta
 
+    def effective_mass(
+        self,
+        state: State,
+        action: jax.Array,
+        param: Dict,
+    ):
+        """
+        Compute the effective mass of the system at a given state. The effective mass
+            M_e = M + G.T @ Sigma^(-1) G
+        where M is the mass marix, G is the combined constraint Jacobian, and Sigma
+        is the combined regularization.
+
+        Parameters
+        ----------
+        state: State
+            The system's state.
+        action: jax.Array
+            The current action.
+        param: SimulationParameters
+            The system's parameters stored as a jax pytree with a dictionary at the top level.
+
+        Returns:
+        -------
+        jax.Array:
+            A 2D array containing the effective mass M_e.
+        """
+        for component in self.pre_step_modifiers:
+            param = param.insert(component.update_params(state, action, param))
+
+        M_stacked, M_inv_stacked, G, Sigma_data, b_data, _ = self.assemble_blocks(
+            state, param
+        )
+        G_dense = G.to_scalar_matrix()
+        M = jax.scipy.linalg.block_diag(*M_stacked)
+        M_Sigma = M + G_dense.T @ jnp.diag(1 / Sigma_data) @ G_dense
+        return M_Sigma
+
     @partial(jit, static_argnums=0)
     def _gravity_gyro_force3D(self, state, param):
         """Compute the external force to apply to each rigid body"""
