@@ -32,7 +32,7 @@ class Environment(ABC):
     def observation_residual(self, target, prediction):
         residual_list = []
         i = 0
-        for sensor in self.sensors:
+        for sensor in self.sim.sensor_list:
             i_next = i + len(sensor.observable_names)
             residual = sensor.residual(target[i:i_next], prediction[i:i_next])
             residual_list.append(residual)
