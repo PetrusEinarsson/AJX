@@ -10,7 +10,7 @@ if __name__ == "__main__":
     env = CartPole(
         sim_settings=SimulationSettings(timestep, False, Solver.DENSE_LINEAR)
     )
-    env_param = env.default_param.insert(src={})
+    env_param = env.default_param.tree_replace(src={})
 
     initial_state = env.state_from_angles(5.0, 3.0, env_param)
 

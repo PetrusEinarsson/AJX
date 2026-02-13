@@ -85,10 +85,11 @@ class GainMotor2(PreStepModifier):
         )
         return {
             "constraint_param": {
-                self.constraint.name: {
-                    "target5": speed,
-                    "compliance5": self.timestep
-                    / param.sparse_param[self.name].inertia,
-                }
+                "target": {self.constraint.name: {5: speed}},
+                "compliance": {
+                    self.constraint.name: {
+                        5: self.timestep / param.sparse_param[self.name].inertia
+                    }
+                },
             }
         }

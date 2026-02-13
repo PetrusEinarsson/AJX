@@ -1,6 +1,6 @@
 import numpy as np
 from ajx.constraints import Constraint
-from ajx.definitions import RigidBody, ComponentNotFoundException
+from ajx.definitions import RigidBody
 from typing import Tuple
 
 
@@ -91,7 +91,7 @@ def get_constraint_sparsity(
         body_ids = []
         for body in constraint.bodies:
             if body not in rigid_body_names:
-                raise ComponentNotFoundException
+                raise Exception(f"{body} not found")
             body_ids.append(rigid_body_names.index(body))
 
         for i, body_id in enumerate(body_ids):

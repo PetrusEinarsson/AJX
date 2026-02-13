@@ -100,19 +100,13 @@ class Furuta(Environment):
             name="hinge2",
         )
 
-        rb_param, rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
-            [
-                (arm1_param, arm1),
-                (arm2_param, arm2),
-            ]
-        )
+        rb_param = RigidBodyParameters.concatenate([arm1_param, arm2_param])
+        rigid_bodies = (arm1, arm2)
 
-        constraint_param, constraints = ConstraintParameters.stack_with_constraints(
-            [
-                (hinge1_param, self.hinge1),
-                (hinge2_param, self.hinge2),
-            ]
+        constraint_param = ConstraintParameters.concatenate(
+            [hinge1_param, hinge2_param]
         )
+        constraints = (self.hinge1, self.hinge2)
 
         pre_step_modifiers = (electric_motor,)
 
@@ -161,7 +155,7 @@ class Furuta(Environment):
         ]
 
     def observation_to_configuration(self, observation, param):
-        world_transform = Configuration(
+        world_transform = Transform(
             jnp.array([0.0, 0.0, 0.0]), jnp.array([1.0, 0.0, 0.0, 0.0])
         )
 
@@ -169,7 +163,9 @@ class Furuta(Environment):
         theta2 = observation[1]
         arm1_transform = self.hinge1.place_other(param, world_transform, theta1)
         arm2_transform = self.hinge2.place_other(param, arm1_transform, theta2)
-        return Configuration.stack([arm1_transform, arm2_transform])
+        return Configuration.concatenate(
+            [arm1_transform.to_configuration(), arm2_transform.to_configuration()]
+        )
 
     def state_from_angles(self, theta1, theta2, param):
         initial_observations = jnp.stack([theta1, theta2], axis=-1)

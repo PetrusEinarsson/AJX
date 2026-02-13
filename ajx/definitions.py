@@ -3,185 +3,54 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 from jax import vmap
-from typing import Callable, List, Tuple, Any, Dict
-from dataclasses import dataclass, field
-from jax.tree_util import register_pytree_node_class
+import ajx.math as math
+from typing import List, Tuple, Any, Dict, Sequence
 from flax import struct
+from ajx.tree_util import ParameterNode
 
 
-def ajx_dataclass(cls):
-    """
-    A class decorator for creating dataclasses that can be passed to jax transformations,
-    similar to flax.struct.dataclass.
-
-    TODO: This implementation is a bit hacky. Compare with flax.struct.dataclass to make it more robust.
-    """
-    cls = dataclass(cls)
-    array_types = ["jnp.array", "jax.Array"]
-    string_types = ["Tuple[str]", "str"]
-    dict_attr_types = ["Dict"]
-    ajx_types = [
-        "Frame",
-        "Configuration",
-        "GeneralizedVelocity",
-        "State",
-        "RigidBodyParameters",
-        "ConstraintParameters",
-    ]
-    array_attr_names = [
-        attr
-        for attr, type_str in cls.__annotations__.items()
-        if type_str in array_types
-    ]
-    ajx_attr_names = [
-        attr for attr, type_str in cls.__annotations__.items() if type_str in ajx_types
-    ]
-    dict_attr_names = [
-        attr
-        for attr, type_str in cls.__annotations__.items()
-        if type_str in dict_attr_types
-    ]
-    dynamic_attr_names = [*array_attr_names, *ajx_attr_names]
-    str_attr_names = [
-        attr
-        for attr, type_str in cls.__annotations__.items()
-        if type_str in string_types
-    ]
-
-    static_attr_names = str_attr_names
-
-    def stack(objects: List):
-        assert len(objects) > 0
-        stacked_attrs = {}
-        for key in array_attr_names:
-            stacked_attr = jnp.stack([obj.__dict__[key] for obj in objects])
-            stacked_attrs[key] = stacked_attr
-        for key in ajx_attr_names:
-            stacked_attr = objects[0].__class__
-            stacked_attrs[key] = stacked_attr
-        for key in str_attr_names:
-            stacked_attr = tuple(obj.__dict__[key] for obj in objects)
-            stacked_attrs[key] = stacked_attr
-
-        return cls(**stacked_attrs)
-
-    def pack(self):
-        packed_groups = []
-        if ajx_attr_names:
-            packed_ajx_attrs = jnp.concatenate(
-                [self.__dict__[key].pack() for key in ajx_attr_names]
-            )
-            packed_groups.append(packed_ajx_attrs)
-        if array_attr_names:
-            packed_array_attrs = jnp.concatenate(
-                [self.__dict__[key].flatten() for key in array_attr_names]
-            )
-            packed_groups.append(packed_array_attrs)
-        if packed_groups:
-            return jnp.concatenate(packed_groups)
-        return jnp.array([])
-
-    def copy(self):
-        return cls(**self.__dict__)
-
-    def tree_flatten(self):
-        children = tuple(self.__dict__[key] for key in dynamic_attr_names)
-        aux_data = tuple(self.__dict__[key] for key in static_attr_names)
-        return (children, aux_data)
-
-    def __getitem__(self, key):
-        traced_vals = {k: self.__dict__[k][key] for k in dynamic_attr_names}
-        if isinstance(key, jax.core.Tracer):
-            untraced_vals = {k: None for k in str_attr_names}
-        else:
-            untraced_vals = {k: self.__dict__[k][key] for k in str_attr_names}
-        return cls(**untraced_vals, **traced_vals)
-
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        aux_dict = {key: val for key, val in zip(static_attr_names, aux_data)}
-        children_dict = {key: val for key, val in zip(dynamic_attr_names, children)}
-        return cls(**aux_dict, **children_dict)
-
-    @classmethod
-    def create_empty_stack(
-        cls,
-    ):
-        empty_attrs = {}
-        for key in array_attr_names:
-            # TODO: The dimensions of the array is unkonwn. We just assume that it is
-            # safe to put as zero
-            empty_attrs[key] = jnp.array([0, 0])
-        for key in ajx_attr_names:
-            empty_attrs[key] = globals()[cls.__annotations__[key]].create_empty_stack()
-        for key in str_attr_names:
-            empty_attrs[key] = ()
-
-        return cls(**empty_attrs)
-
-    def create_in_axes(self, mapped_axes: Dict):
-        attrs = {}
-        for key in array_attr_names:
-            # TODO: The dimensions of the array is unkonwn. We just assume that it is
-            # safe to put as zero
-            attrs[key] = None
-        for key in ajx_attr_names:
-            attrs[key] = None
-        for key in dict_attr_names:
-            attrs[key] = None
-        for key in str_attr_names:
-            attrs[key] = self.__dict__[key]
-        for key, value in mapped_axes.items():
-            attrs[key] = value
-        return cls(**attrs)
-
-    def __hash__(self):
-        # TODO: Is this a bad idea?
-        vals = tuple(self.__dict__[key] for key in str_attr_names)
-        return hash(vals)
-
-    cls.stack = stack
-    cls.pack = pack
-    cls.create_in_axes = create_in_axes
-    if not hasattr(cls, "copy"):
-        cls.copy = copy
-    cls.create_empty_stack = create_empty_stack
-    if not hasattr(cls, "tree_flatten"):
-        cls.tree_flatten = tree_flatten
-    if not hasattr(cls, "tree_unflatten"):
-        cls.tree_unflatten = tree_unflatten
-    cls.__getitem__ = __getitem__
-    cls.__hash__ = __hash__
-
-    register_pytree_node_class(cls)
-
-    return cls
-
-
-class ComponentNotFoundException(Exception):
-    pass
-
-
-@ajx_dataclass
-class Frame:
-    position: jnp.array
-    rotation: jnp.array
-
-
-@ajx_dataclass
+@struct.dataclass
 class RigidBody:
     name: Tuple[str]
     geometry: Tuple[str]
 
 
-@ajx_dataclass
-class Configuration:
+@struct.dataclass
+class Transform(ParameterNode):
+    """Dataclass for a transform by position and rotation"""
+
     pos: jax.Array
     rot: jax.Array
 
+    def to_configuration(self):
+        return Configuration(self.pos[None], self.rot[None])
 
-@ajx_dataclass
-class GeneralizedVelocity:
+
+@struct.dataclass
+class Configuration(ParameterNode):
+    """Dataclass for the full configuration of a system"""
+
+    pos: jax.Array
+    rot: jax.Array
+
+    def retract(self, update: jax.Array) -> Configuration:
+        assert update.size == self.tangent_size()
+        n_bodies = self.pos.shape[0]
+        update = update.reshape(n_bodies, 6)
+        delta_pos = update[:, :3]
+        delta_rot = update[:, 3:]
+        quaternion_delta = vmap(math.from_rotation_vector)(delta_rot)
+        new_pos = self.pos + delta_pos
+        new_rot = vmap(math.quat_mul)(quaternion_delta, self.rot)
+        return Configuration(new_pos, new_rot)
+
+    def tangent_size(self):
+        n_bodies = self.pos.shape[0]
+        return 6 * n_bodies
+
+
+@struct.dataclass
+class GeneralizedVelocity(ParameterNode):
     data: jax.Array
 
     @property
@@ -193,20 +62,35 @@ class GeneralizedVelocity:
         return self.data[..., 3:]
 
 
-@ajx_dataclass
-class State:
+@struct.dataclass
+class State(ParameterNode):
     conf: Configuration
     gvel: GeneralizedVelocity
 
 
-@ajx_dataclass
-class ConstraintParameters:
+@struct.dataclass
+class Frame(ParameterNode):
+    position: jnp.array
+    rotation: jnp.array
+
+    def to_frames(self):
+        return Frames(self.position[None], self.rotation[None])
+
+
+@struct.dataclass
+class Frames(ParameterNode):
+    position: jnp.array
+    rotation: jnp.array
+
+
+@struct.dataclass
+class ConstraintParameters(ParameterNode):
     # Fixed
-    names: Tuple[str]
+    names: Tuple[str] = struct.field(pytree_node=False)
 
     # Dynamic
-    frame_a: Frame
-    frame_b: Frame
+    frame_a: Frames
+    frame_b: Frames
     compliance: jax.Array  # Viscous compliance for velocity constrained dofs
     damping: jax.Array  # Ignored for velocity constrained dofs
     target: jax.Array  # Target velocity for velocity constrained dofs
@@ -222,22 +106,37 @@ class ConstraintParameters:
         b: float,
         name: str,
     ):
-        holonomic_compliance = jnp.array([compliance] * 5)
-        holonomic_damping = jnp.array([damping] * 5)
-        viscous_compliance = jnp.array([1.0 / b])
-        ignored_damping = jnp.array([0.0])
-        target = jnp.zeros(6)
-        compliance = jnp.concatenate([holonomic_compliance, viscous_compliance])
-        damping = jnp.concatenate([holonomic_damping, ignored_damping])
-        is_velocity = jnp.array([False, False, False, False, False, True], dtype=bool)
+        holonomic_compliance = jnp.array([compliance] * 5)[None]
+        holonomic_damping = jnp.array([damping] * 5)[None]
+        viscous_compliance = jnp.array([1.0 / b])[None]
+        ignored_damping = jnp.array([0.0])[None]
+        target = jnp.zeros(6)[None]
+        compliance = jnp.concatenate([holonomic_compliance, viscous_compliance], axis=1)
+        damping = jnp.concatenate([holonomic_damping, ignored_damping], axis=1)
+        is_velocity = jnp.array([False, False, False, False, False, True], dtype=bool)[
+            None
+        ]
+        names = (name,)
         return cls(
-            name,
-            frame_a=frame_a,
-            frame_b=frame_b,
+            names,
+            frame_a=frame_a.to_frames(),
+            frame_b=frame_b.to_frames(),
             compliance=compliance,
             damping=damping,
             target=target,
             is_velocity=is_velocity,
+        )
+
+    @classmethod
+    def create_empty(cls):
+        return cls(
+            names=(),
+            frame_a=Frames(jnp.array([0, 3]), jnp.array([0, 4])),
+            frame_b=Frames(jnp.array([0, 3]), jnp.array([0, 4])),
+            compliance=jnp.array([0, 6]),
+            damping=jnp.array([0, 6]),
+            target=jnp.array([0, 6]),
+            is_velocity=jnp.array([0, 6]),
         )
 
     @classmethod
@@ -260,45 +159,6 @@ class ConstraintParameters:
             [frame_a_data, frame_b_data, holonomic_compliance, damping, target, offset]
         )
         return cls(name, new_data)
-
-    def stack_with_constraints(
-        param_constraint_pairs: Tuple[Tuple[ConstraintParameters, Any]],
-    ):
-        if not param_constraint_pairs:
-            return ConstraintParameters.create_empty_stack(), tuple()
-        frame_a_stacked = Frame.stack(
-            [pair[0].frame_a for pair in param_constraint_pairs]
-        )
-        frame_b_stacked = Frame.stack(
-            [pair[0].frame_b for pair in param_constraint_pairs]
-        )
-        compliance_stacked = jnp.stack(
-            [pair[0].compliance for pair in param_constraint_pairs]
-        )
-        damping_stacked = jnp.stack(
-            [pair[0].damping for pair in param_constraint_pairs]
-        )
-        target_stacked = jnp.stack([pair[0].target for pair in param_constraint_pairs])
-        is_velocity_stacked = jnp.stack(
-            [pair[0].is_velocity for pair in param_constraint_pairs]
-        )
-
-        c_names = tuple([pair[0].names for pair in param_constraint_pairs])
-        constraints = tuple(pair[1] for pair in param_constraint_pairs)
-        c_names2 = tuple(constraint.name for constraint in constraints)
-        assert c_names == c_names2
-        return (
-            ConstraintParameters(
-                c_names,
-                frame_a_stacked,
-                frame_b_stacked,
-                compliance_stacked,
-                damping_stacked,
-                target_stacked,
-                is_velocity_stacked,
-            ),
-            constraints,
-        )
 
     def insert(self, src):
         new = self.copy()
@@ -338,70 +198,33 @@ class ConstraintParameters:
         return new
 
 
-@ajx_dataclass
-class RigidBodyParameters:
+@struct.dataclass
+class RigidBodyParameters(ParameterNode):
     # Fixed
-    names: Tuple[str]
+    names: Tuple[str] = struct.field(pytree_node=False)
 
-    # Dynamic
-    data: jnp.array
+    # 2D Array
+    mass: jax.Array  # [nb, 1]
+    mc: jax.Array  # [nb, 3]
+    inertia: jax.Array  # [nb, 6]
 
-    def __init__(
-        self,
-        names,
-        data,
-    ):
-        self.names = names
-        self.data = data
-
-    @property
-    def mass(self):
-        return self.data[..., 0]
-
-    @property
-    def mc(self):
-        return self.data[..., 1:4]
-
-    @property
-    def inertia(self):
+    def get_inertia_matrix(self):
+        # Assumes vmap...
         inertia = jnp.zeros([3, 3])
-        if len(self.data.shape) == 2:
-            n_bodies = self.data.shape[0]
-            inertia = jnp.zeros([n_bodies, 3, 3])
         triu = jnp.triu_indices(3)
         tril = (triu[1], triu[0])
-        if len(self.data.shape) == 2:
-            inertia = vmap(lambda x, y: x.at[triu].set(y))(
-                inertia, self.data[..., 4:10]
-            )
-            inertia = vmap(lambda x, y: x.at[triu].set(y))(
-                inertia, self.data[..., 4:10]
-            )
-        else:
-            inertia = inertia.at[triu].set(self.data[4:10])
-            inertia = inertia.at[tril].set(self.data[4:10])
-
+        inertia = inertia.at[triu].set(self.inertia)
+        inertia = inertia.at[tril].set(self.inertia)
         return inertia
 
     @classmethod
     def create(cls, mass: float, inertia_diag: jax.Array, name: str):
-        mass = jnp.array(mass).reshape(1)
-        mc = jnp.array([0.0, 0.0, 0.0])
+        mass = jnp.array(mass).reshape([1])[None]
+        mc = jnp.array([0.0, 0.0, 0.0])[None]
         diag_indices = jnp.array([0, 3, 5])
-        inertia = jnp.zeros(6).at[diag_indices].set(inertia_diag)
-
-        new_data = jnp.concatenate([mass, mc, inertia])
-        return cls(name, new_data)
-
-    def stack_with_rigid_bodies(
-        param_rb_pairs: Tuple[Tuple[RigidBodyParameters, RigidBody]],
-    ):
-        data_stacked = jnp.stack([param_rb[0].data for param_rb in param_rb_pairs])
-        rb_names = tuple([param_rb[0].names for param_rb in param_rb_pairs])
-        rigid_bodies = tuple(param_rb[1] for param_rb in param_rb_pairs)
-        rb_names2 = tuple(rb.name for rb in rigid_bodies)
-        assert rb_names == rb_names2
-        return RigidBodyParameters(rb_names, data_stacked), rigid_bodies
+        inertia = jnp.zeros(6).at[diag_indices].set(inertia_diag)[None]
+        names = (name,)
+        return cls(names, mass, mc, inertia)
 
     def insert(self, src):
         new = self.copy()

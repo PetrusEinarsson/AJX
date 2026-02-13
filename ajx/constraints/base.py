@@ -13,9 +13,9 @@ class ConstraintType(Enum):
 
 
 @jit
-def get_frame_transform(frame, body_pos, body_rotation):
-    d0 = frame.position
-    frame_rot0 = frame.rotation
+def get_frame_transform(frame, constraint_id, body_pos, body_rotation):
+    d0 = frame.position[constraint_id]
+    frame_rot0 = frame.rotation[constraint_id]
     frame_rot = math.quat_mul(body_rotation, frame_rot0)
     d = math.rotate_vector(body_rotation, d0)
     u = math.rotation_matrix(frame_rot)[:, 0]

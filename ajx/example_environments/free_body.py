@@ -35,10 +35,10 @@ class FreeBody(Environment):
         body_param = RigidBodyParameters.create(
             mass=1.0, inertia_diag=inertia, name="body"
         )
-        rb_param, rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
-            [(body_param, self.body)]
-        )
-        constraint_param, constraints = ConstraintParameters.stack_with_constraints([])
+        rb_param = body_param
+        rigid_bodies = (self.body,)
+        constraint_param = ConstraintParameters.create_empty()
+        constraints = ()
 
         pre_step_modifiers = ()
 

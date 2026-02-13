@@ -90,22 +90,12 @@ class CartPole(Environment):
             b=0.04,
             name="hinge",
         )
-
-        rb_param, self.rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
-            [
-                (cart_param, cart),
-                (pendulum_param, self.pendulum),
-            ]
+        rb_param = RigidBodyParameters.concatenate([cart_param, pendulum_param])
+        self.rigid_bodies = (cart, self.pendulum)
+        constraint_param = ConstraintParameters.concatenate(
+            [prismatic_param, hinge_param]
         )
-
-        constraint_param, self.constraints = (
-            ConstraintParameters.stack_with_constraints(
-                [
-                    (prismatic_param, self.prismatic),
-                    (hinge_param, self.hinge),
-                ]
-            )
-        )
+        self.constraints = (self.prismatic, self.hinge)
 
         self.pre_step_modifiers = (motor,)
 
@@ -148,7 +138,7 @@ class CartPole(Environment):
         )
 
     def observation_to_configuration(self, observation, param):
-        world_transform = Configuration(
+        world_transform = Transform(
             jnp.array([0.0, 0.0, 0.0]), jnp.array([1.0, 0.0, 0.0, 0.0])
         )
 
@@ -156,7 +146,9 @@ class CartPole(Environment):
         theta = observation[1]
         cart_transform = self.prismatic.place_other(param, world_transform, x)
         pendulum_transform = self.hinge.place_other(param, cart_transform, theta)
-        return Configuration.stack([cart_transform, pendulum_transform])
+        return Configuration.concatenate(
+            [cart_transform.to_configuration(), pendulum_transform.to_configuration()]
+        )
 
     def state_from_angles(self, x, theta, param):
         initial_observations = jnp.stack([x, theta], axis=-1)

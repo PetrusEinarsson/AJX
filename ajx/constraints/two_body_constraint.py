@@ -6,7 +6,7 @@ from jax import jit
 import jax.numpy as jnp
 
 from enum import Enum
-from ajx.definitions import Configuration, State
+from ajx.definitions import Transform, State
 from ajx.param import SimulationParameters
 from typing import Union, Tuple
 from functools import partial
@@ -14,9 +14,9 @@ from ajx.constraints.base import Constraint, ConstraintType, get_frame_transform
 
 
 @jit
-def get_frame_transform(frame, body_pos, body_rotation):
-    d0 = frame.position
-    frame_rot0 = frame.rotation
+def get_frame_transform(frame, constraint_id, body_pos, body_rotation):
+    d0 = frame.position[constraint_id]
+    frame_rot0 = frame.rotation[constraint_id]
     frame_rot = math.quat_mul(body_rotation, frame_rot0)
     d = math.rotate_vector(body_rotation, d0)
     u = math.rotation_matrix(frame_rot)[:, 0]
@@ -95,11 +95,11 @@ class TwoBodyConstraint(Constraint):
         body_a_rot = state.conf.rot[body_a_id]
 
         d_a, u_a, v_a, w_a = get_frame_transform(
-            param.constraint_param[constraint_id].frame_a, body_a_pos, body_a_rot
+            param.constraint_param.frame_a, constraint_id, body_a_pos, body_a_rot
         )
 
         d_b, u_b, v_b, w_b = get_frame_transform(
-            param.constraint_param[constraint_id].frame_b, body_b_pos, body_b_rot
+            param.constraint_param.frame_b, constraint_id, body_b_pos, body_b_rot
         )
 
         r_a = body_a_pos + d_a
@@ -113,13 +113,13 @@ class TwoBodyConstraint(Constraint):
         dot2_2 = jnp.dot(w_a, r_a - r_b)
 
         # TODO: Copy and paste code. Computations are done twice...
-        frame_a_pos0 = param.constraint_param[constraint_id].frame_a.position
-        frame_a_rot0 = param.constraint_param[constraint_id].frame_a.rotation
+        frame_a_pos0 = param.constraint_param.frame_a.position[constraint_id]
+        frame_a_rot0 = param.constraint_param.frame_a.rotation[constraint_id]
         frame_a_rot = math.quat_mul(body_a_rot, frame_a_rot0)
         d_a = math.rotate_vector(body_a_rot, frame_a_pos0)
 
-        frame_b_pos0 = param.constraint_param[constraint_id].frame_b.position
-        frame_b_rot0 = param.constraint_param[constraint_id].frame_b.rotation
+        frame_b_pos0 = param.constraint_param.frame_b.position[constraint_id]
+        frame_b_rot0 = param.constraint_param.frame_b.rotation[constraint_id]
         frame_b_rot = math.quat_mul(body_b_rot, frame_b_rot0)
         d_b = math.rotate_vector(body_b_rot, frame_b_pos0)
 
@@ -160,10 +160,10 @@ class TwoBodyConstraint(Constraint):
         body_a_rot = state.conf.rot[body_a_id]
 
         d_a, u_a, v_a, w_a = get_frame_transform(
-            param.constraint_param[constraint_id].frame_a, body_a_pos, body_a_rot
+            param.constraint_param.frame_a, constraint_id, body_a_pos, body_a_rot
         )
         d_b, u_b, v_b, w_b = get_frame_transform(
-            param.constraint_param[constraint_id].frame_b, body_b_pos, body_b_rot
+            param.constraint_param.frame_b, constraint_id, body_b_pos, body_b_rot
         )
 
         r_a = body_a_pos + d_a
@@ -221,13 +221,13 @@ class TwoBodyConstraint(Constraint):
         body_a_pos = state.conf.pos[body_a_id]
         body_a_rot = state.conf.rot[body_a_id]
 
-        frame_a_pos0 = param.constraint_param[constraint_id].frame_a.position
-        frame_a_rot0 = param.constraint_param[constraint_id].frame_a.rotation
+        frame_a_pos0 = param.constraint_param.frame_a.position[constraint_id]
+        frame_a_rot0 = param.constraint_param.frame_a.rotation[constraint_id]
         frame_a_rot = math.quat_mul(body_a_rot, frame_a_rot0)
         d_a = math.rotate_vector(body_a_rot, frame_a_pos0)
 
-        frame_b_pos0 = param.constraint_param[constraint_id].frame_b.position
-        frame_b_rot0 = param.constraint_param[constraint_id].frame_b.rotation
+        frame_b_pos0 = param.constraint_param.frame_b.position[constraint_id]
+        frame_b_rot0 = param.constraint_param.frame_b.rotation[constraint_id]
         frame_b_rot = math.quat_mul(body_b_rot, frame_b_rot0)
         d_b = math.rotate_vector(body_b_rot, frame_b_pos0)
 
@@ -249,8 +249,8 @@ class TwoBodyConstraint(Constraint):
         return free_hinge + free_prismatic
 
     def place_other(
-        self, param: SimulationParameters, body_a_transform: Configuration, x: float
-    ) -> Configuration:
+        self, param: SimulationParameters, body_a_transform: Transform, x: float
+    ) -> Transform:
         """
         Returns the configuration of the next body within a kinematic tree containing this joint.
 
@@ -258,31 +258,32 @@ class TwoBodyConstraint(Constraint):
         ----------
         param: Dict
             The system's parameters stored as a jax pytree with a dictionary at the top level.
-        body_a_transform: Configuration
-            The configuration of the previous body/frame in the kinematic chain.
+        body_a_transform: Transform
+            The transform of the previous body/frame in the kinematic chain.
         x: float
             Value of the free degree displacement between the frames (Assumes prismatic or hinge).
         Returns:
         -------
-        Configuration:
-            The configuration of the next body.
+        Transform:
+            The transform of the next body.
         """
-        cp = param.get_cp(self.name)
-        d0_a = cp.frame_a.position
-        frame_a_rot0 = cp.frame_a.rotation
+        i = param.constraint_param.names.index(self.name)
+        cp = param.constraint_param
+        d0_a = cp.frame_a.position[i]
+        frame_a_rot0 = cp.frame_a.rotation[i]
         d_a = math.rotate_vector(body_a_transform.rot, d0_a)
         frame_a_position = body_a_transform.pos + d_a
         frame_a_rot = math.quat_mul(body_a_transform.rot, frame_a_rot0)
         v_a = math.rotation_matrix(frame_a_rot)[:, 1]
 
         # Hinge
-        frame_b_rot0 = cp.frame_b.rotation
+        frame_b_rot0 = cp.frame_b.rotation[i]
         frame_b_rot_as_seen_from_a = math.quat_from_axis_angle(
             jnp.array([1.0, 0.0, 0.0]), x
         )
         frame_b_rot = math.quat_mul(frame_a_rot, frame_b_rot_as_seen_from_a)
         hinge_body_b_rotation = math.quat_mul(frame_b_rot, math.conjugate(frame_b_rot0))
-        d0_b = cp.frame_b.position
+        d0_b = cp.frame_b.position[i]
         d_b = math.rotate_vector(hinge_body_b_rotation, d0_b)
         hinge_body_b_position = frame_a_position - d_b
 
@@ -290,8 +291,8 @@ class TwoBodyConstraint(Constraint):
         d_b = v_a * x
         frame_b_pos = frame_a_position - d_b
         frame_b_rot = frame_a_rot
-        frame_b_rot0 = cp.frame_b.rotation
-        d0_b = cp.frame_b.position
+        frame_b_rot0 = cp.frame_b.rotation[i]
+        d0_b = cp.frame_b.position[i]
         frame_b_rot0_inv = math.conjugate(frame_b_rot0)
         prismatic_body_b_rotation = math.quat_mul(frame_b_rot, frame_b_rot0_inv)
         prismatic_body_b_position = frame_b_pos - d_a
@@ -307,4 +308,4 @@ class TwoBodyConstraint(Constraint):
             self.constraint_type == ConstraintType.PRISMATIC.value
         )
 
-        return Configuration(body_b_position, body_b_rotation)
+        return Transform(body_b_position, body_b_rotation)

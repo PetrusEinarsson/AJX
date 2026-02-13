@@ -34,9 +34,8 @@ class Pendulum(Environment):
             name="pendulum",
         )
 
-        self.rb_param, self.rigid_bodies = RigidBodyParameters.stack_with_rigid_bodies(
-            [(self.pendulum_param, self.pendulum)]
-        )
+        self.rb_param = self.pendulum_param
+        self.rigid_bodies = (self.pendulum,)
 
         self.hinge = OneBodyConstraint(
             name="hinge",
@@ -55,11 +54,8 @@ class Pendulum(Environment):
             name="hinge",
         )
 
-        self.constraint_param, self.constraints = (
-            ConstraintParameters.stack_with_constraints(
-                [(self.hinge_param, self.hinge)]
-            )
-        )
+        self.constraint_param = self.hinge_param
+        self.constraints = (self.hinge,)
 
         self.damping_param = QuadraticDampingParameters(b=0.04, c=0.01)
 
@@ -100,14 +96,14 @@ class Pendulum(Environment):
         )
 
     def observation_to_configuration(self, observation, param):
-        world_transform = Configuration(
+        world_transform = Transform(
             jnp.array([0.0, 0.0, 0.0]), jnp.array([1.0, 0.0, 0.0, 0.0])
         )
 
         theta = observation[0]
         pendulum_transform = self.hinge.place_other(param, world_transform, theta)
 
-        return Configuration.stack([pendulum_transform])
+        return Configuration.concatenate([pendulum_transform.to_configuration()])
 
     def state_from_angle(self, theta, param):
         initial_obs = jnp.stack([theta], axis=-1)

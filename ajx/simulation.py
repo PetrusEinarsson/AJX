@@ -115,7 +115,7 @@ class Simulation:
             Solver state.
         """
         for component in self.pre_step_modifiers:
-            param = param.insert(component.update_params(state, u, param))
+            param = param.tree_replace(component.update_params(state, u, param))
         f_ext = self._gravity_gyro_force3D(state, param)
 
         return self._force_solver(state, f_ext, param)
@@ -279,7 +279,8 @@ class Simulation:
             ang = state.gvel.ang
             if self.settings.use_gyroscopic:
                 rotation = math.rotation_matrix(state.conf.rot)
-                world_inertia = rotation @ rb_param.inertia @ rotation.T
+                inertia = rb_param.get_inertia_matrix()
+                world_inertia = rotation @ inertia @ rotation.T
                 gyroscopic_torque = -jnp.cross(ang, world_inertia @ ang)
             force_ext = g * mass
             # This force terms should always be zero and are only used to get derivative information
@@ -346,8 +347,8 @@ class Simulation:
         def assemble_mass_block(
             rb_param: RigidBodyParameters, rot: jax.Array
         ) -> Tuple[jax.Array, jax.Array]:
-            m = rb_param.mass
-            J = rb_param.inertia
+            m = rb_param.mass[0]
+            J = rb_param.get_inertia_matrix()
             R = jit(math.rotation_matrix)(rot)
             mc = R @ rb_param.mc
             inertia_block = R @ J @ R.T

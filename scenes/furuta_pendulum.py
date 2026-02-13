@@ -11,7 +11,7 @@ if __name__ == "__main__":
     environment = Furuta(
         sim_settings=SimulationSettings(timestep, True, Solver.DENSE_LINEAR)
     )
-    env_param = environment.default_param.insert(src={})
+    env_param = environment.default_param.tree_replace(src={})
     theta1 = 1.0
     theta2 = 4.0
 
