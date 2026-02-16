@@ -77,6 +77,8 @@ class ParameterNode:
             if key in parameter_node_attibutes:
                 if isinstance(val, dict):
                     new.__dict__[key] = self.__dict__[key].tree_replace(val)
+                elif val is None:
+                    continue
                 else:
                     raise ValueError("Unsupported type")
             if key in array_attributes:
