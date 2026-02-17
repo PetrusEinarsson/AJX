@@ -34,18 +34,21 @@ class Configuration(ParameterNode):
     rot: jax.Array
 
     def retract(self, update: jax.Array) -> Configuration:
-        assert update.size == self.tangent_size()
+        assert update.shape == (
+            self.tangent_size(),
+        ), f"Expected update shape ({self.tangent_size()},), got {update.shape}."
+        assert len(self.pos.shape) == 2, (
+            f"Expected pos to have shape (n_bodies, 3); got {self.pos.shape}. "
+            "Use vmap for batched inputs."
+        )
         n_bodies = self.pos.shape[0]
-        if len(self.pos.shape) == 3:
-            n_timesteps = self.pos.shape[0]
-            return vmap(Configuration.retract)(self, update.reshape(n_timesteps, -1))
-        if len(self.pos.shape) == 2:
-            update = update.reshape(n_bodies, 6)
-            delta_pos = update[:, :3]
-            delta_rot = update[:, 3:]
-            quaternion_delta = vmap(math.from_rotation_vector)(delta_rot)
-            new_pos = self.pos + delta_pos
-            new_rot = vmap(math.quat_mul)(quaternion_delta, self.rot)
+        update = update.reshape(n_bodies, 6)
+        delta_pos = update[:, :3]
+        delta_rot = update[:, 3:]
+        quaternion_delta = vmap(math.from_rotation_vector)(delta_rot)
+        new_pos = self.pos + delta_pos
+        new_rot = vmap(math.quat_mul)(quaternion_delta, self.rot)
+        new_rot = vmap(math.normalize)(new_rot)
         return Configuration(new_pos, new_rot)
 
     def tangent_size(self):
