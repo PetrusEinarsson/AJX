@@ -22,13 +22,6 @@ class Environment(ABC):
         self.observable_names = observable_names
         self.residual_names = residual_names
 
-    def inverse_dynamics(self, state, target_state, u, param):
-        return self.sim.inverse_dynamics(state, target_state, u, param)
-
-    def observe_state(self, state, u, param):
-        qdot_next, mul, code = self.force(state, u, param)
-        return self.observe(state, qdot_next, param)
-
     def observation_residual(self, target, prediction):
         residual_list = []
         i = 0
@@ -38,6 +31,10 @@ class Environment(ABC):
             residual_list.append(residual)
             i = i_next
         return jnp.concatenate(residual_list)
+
+    def observe_state(self, state, u, param):
+        (qdot_next, mul), code = self.sim.pre_step(state, u, param)
+        return self.sim.observe(state, qdot_next, param)
 
     def step(self, state, action, param):
         (qdot_next, multipliers), code = self.sim.pre_step(state, action, param)
