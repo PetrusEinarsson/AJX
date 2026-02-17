@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from flax import struct
 from dataclasses import asdict, fields
 from typing import Dict, Tuple
+import numbers
 
 
 def arr_tree_replace(arr, src):
@@ -384,3 +385,50 @@ class ParameterNode:
         for key, value in mapped_axes.items():
             attrs[key] = value
         return type(self)(**attrs)
+
+
+def flatten_dict_paths(parameter_tree):
+    """
+    Flatten a nested parameter tree into a single-level dictionary with
+    dot-separated path keys.
+
+    Parameters
+    ----------
+    parameter_tree : dict
+        A nested dictionary representing a parameter tree. Internal nodes
+        must be dictionaries, and leaves are terminal parameter values
+        (e.g., ``jax.Array`` instances or numeric scalars).
+
+    Returns
+    -------
+    Dict[str, object]
+        A dictionary mapping dot-separated parameter paths (e.g.
+        ``"rigid_body_parameters.constraints.compliance.body"``)
+        to their corresponding leaf values.
+
+    Raises
+    ------
+    TypeError
+        If an unsupported node or leaf type is encountered during
+        traversal.
+
+    Examples
+    --------
+    >>> parameter_tree = {"a": {"b": 1.0, "c": 2.0}}
+    >>> flatten_dict_paths(parameter_tree)
+    {'a.b': 1.0, 'a.c': 2.0}
+    """
+
+    def _iter_leaf_paths(p, label=None):
+        if isinstance(p, dict):
+            for k, v in p.items():
+                new_label = k if label is None else f"{label}.{k}"
+                yield from _iter_leaf_paths(v, new_label)
+            return
+        elif isinstance(p, (jax.Array, numbers.Real, ParameterNode)):
+            yield (label, p)
+        else:
+            raise TypeError(f"Unsupported type at '{label}': {type(p).__name__}")
+        return
+
+    return dict(_iter_leaf_paths(parameter_tree))
