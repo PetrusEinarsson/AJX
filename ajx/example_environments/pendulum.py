@@ -5,6 +5,11 @@ from ajx import *
 
 import scenes.graphics.geometry as geometry
 
+PendulumSparseParamClass = create_parameter_node(
+    "PendulumSparseParam",
+    ("damping",),
+)
+
 
 class Pendulum(Environment):
     def __init__(
@@ -73,12 +78,11 @@ class Pendulum(Environment):
             self.pre_step_modifiers,
         )
 
-        SparseParamClass = create_parameter_node("PendulumSparseParam", ("damping",))
         self.default_param = SimulationParameters(
             jnp.array([0.0, -9.82, 0.0]),
             self.rb_param,
             self.constraint_param,
-            SparseParamClass(damping=self.damping_param),
+            PendulumSparseParamClass(damping=self.damping_param),
         )
 
         self.geometry_list = (self.pendulum_box,)

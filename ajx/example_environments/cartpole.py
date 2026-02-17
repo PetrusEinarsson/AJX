@@ -4,6 +4,8 @@ from ajx.example_environments.environment import Environment
 
 import scenes.graphics.geometry as geometry
 
+CartPoleSparseParam = create_parameter_node("CartPoleSparseParam", ("motor",))
+
 
 class CartPole(Environment):
     def __init__(self, sim_settings: SimulationSettings):
@@ -112,12 +114,11 @@ class CartPole(Environment):
             self.pre_step_modifiers,
         )
 
-        SparseParamClass = create_parameter_node("CartPoleSparseParam", ("motor",))
         self.default_param = SimulationParameters(
             jnp.array([0.0, -9.82, 0.0]),
             rb_param,
             constraint_param,
-            sparse_param=SparseParamClass(motor=motor_param),
+            sparse_param=CartPoleSparseParam(motor=motor_param),
         )
 
         self.geometry_list = (self.cart_box, self.pendulum_box)
