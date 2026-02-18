@@ -17,7 +17,12 @@ def arr_tree_replace(arr, src, name_idx_maps=()):
             value = {next_key: value}
             key = key[0]
 
-        idx = name_idx_maps[0].index(key)
+        if isinstance(key, int):
+            idx = key
+        elif isinstance(key, str):
+            idx = name_idx_maps[0].index(key)
+        else:
+            raise Exception
         if isinstance(value, (jax.Array, int, float)):
             arr = arr.at[idx].set(value)
         elif isinstance(value, dict):
