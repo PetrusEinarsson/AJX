@@ -25,34 +25,6 @@ class GainMotorParameters(ParameterNode):
     gain: float
 
 
-class GainMotor(PreStepModifier):
-    def __init__(self, name: str, target_constraint, target_constraint_name, timestep):
-        self.name = name
-        self.target_constraint = target_constraint
-        self.target_constraint_name = target_constraint_name
-        self.timestep = timestep
-
-    def update_params(self, state, u, param):
-        jac = self.target_constraint.tangential_projection(param, state)
-        omega = sum([val @ state.gvel.data[body] for body, val in jac.items()])
-
-        speed = (
-            omega[0]
-            - self.timestep**2
-            / param.sparse_param[self.name].inertia
-            * param.sparse_param[self.name].gain
-            * u[0]
-        )
-        return {
-            "motor_param": {
-                self.target_constraint_name: {
-                    "speed": speed,
-                    "b": param.sparse_param[self.name].inertia / self.timestep,
-                }
-            }
-        }
-
-
 class GainMotor2(PreStepModifier):
     def __init__(self, name: str, constraint, timestep: float, idx: int):
         self.name = name
@@ -86,13 +58,15 @@ class GainMotor2(PreStepModifier):
             * sparse_dict_param[self.name].gain
             * u[self.idx]
         )
-        return {
-            "constraint_param": {
-                "target": {self.constraint.name: {5: speed}},
-                "compliance": {
-                    self.constraint.name: {
-                        5: self.timestep / sparse_dict_param[self.name].inertia
-                    }
-                },
+        return state, param.tree_replace(
+            {
+                "constraint_param": {
+                    "target": {self.constraint.name: {5: speed}},
+                    "compliance": {
+                        self.constraint.name: {
+                            5: self.timestep / sparse_dict_param[self.name].inertia
+                        }
+                    },
+                }
             }
-        }
+        )
