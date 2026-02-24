@@ -62,6 +62,11 @@ class Configuration(ParameterNode):
             return 6 * n_bodies
         raise Exception
 
+    def log_map(self, other: Configuration):
+        rot_delta = vmap(math.quat_residual)(self.rot, other.rot)
+        pos_delta = self.pos - other.pos
+        return jnp.concatenate([pos_delta.flatten(), rot_delta.flatten()])
+
 
 @struct.dataclass
 class GeneralizedVelocity(ParameterNode):

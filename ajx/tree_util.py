@@ -191,6 +191,21 @@ class ParameterNode:
 
         return new
 
+    def log_map(self, other: ParameterNode) -> jax.Array:
+        residuals = []
+        for f in fields(self):
+            self_value = getattr(self, f.name)
+            other_value = getattr(other, f.name)
+            if isinstance(self_value, (jax.Array, float)):
+                residual = (self_value - other_value).flatten()
+            elif isinstance(self_value, ParameterNode):
+                residual = self_value.log_map(other_value)
+            else:
+                raise Exception
+            residuals.append(residual)
+
+        return jnp.concatenate(residuals)
+
     def tree_retract(self, delta: Dict) -> ParameterNode:
         """
         Recursively applies structured updates to leaves using retraction rules.
