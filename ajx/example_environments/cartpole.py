@@ -9,8 +9,12 @@ CartPoleSparseParam = create_parameter_node("CartPoleSparseParam", ("motor",))
 
 class CartPole(Environment):
     def __init__(self, sim_settings: SimulationSettings):
+        self.timestep = sim_settings.timestep
+        self.state_tangent_dim = 12 * 2
+        self.settings = sim_settings
 
         self._build_sim(sim_settings)
+        self.dynamic_residual_names = self.get_state_residual_names()
         self.control_names = ["motor"]
 
         super().post_init()

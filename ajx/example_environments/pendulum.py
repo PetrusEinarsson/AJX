@@ -18,8 +18,12 @@ class Pendulum(Environment):
         has_quadratic_damping: bool,
     ):
         self.has_quadratic_damping = has_quadratic_damping
+        self.timestep = sim_settings.timestep
+        self.state_tangent_dim = 12
+        self.settings = sim_settings
 
         self._build_sim(sim_settings)
+        self.dynamic_residual_names = self.get_state_residual_names()
         self.control_names = []
 
         super().post_init()

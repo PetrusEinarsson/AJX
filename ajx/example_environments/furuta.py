@@ -19,13 +19,17 @@ class Furuta(Environment):
         reference_timestep: Optional[float] = None,
     ):
         self.n_control = 1
+        self.timestep = sim_settings.timestep
 
         self.reference_timestep = reference_timestep
         if not reference_timestep:
             self.reference_timestep = sim_settings.timestep
 
         self.control_names = ["voltage"]
+        self.state_tangent_dim = 2 * 12
+        self.settings = sim_settings
         self._build_sim(sim_settings)
+        self.dynamic_residual_names = self.get_state_residual_names()
 
         super().post_init()
 
