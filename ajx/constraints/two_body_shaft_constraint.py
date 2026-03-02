@@ -26,7 +26,7 @@ def get_frame_transform(frame, constraint_id, body_pos, body_rotation):
     return d, u, v, w
 
 
-class TwoBodyConstraint(Constraint):
+class TwoBodyShaftConstraint(Constraint):
     """
     A constraint that restricts the relative motion between two bodies.
 
@@ -38,23 +38,30 @@ class TwoBodyConstraint(Constraint):
     name: str
     body_a: str
     body_b: str
+    shaft: str
     constraint_type: ConstraintType
-    dof: int = 6
     is_attached_to_world: bool = False
+    dof: int = 6
 
     def get_num_bodies():
-        return 2
+        return 3
 
     @property
     def bodies(self):
-        return (self.body_a, self.body_b)
+        return (self.body_a, self.body_b, self.shaft)
 
     def __init__(
-        self, name: str, body_a: str, body_b: str, constraint_type: ConstraintType
+        self,
+        name: str,
+        body_a: str,
+        body_b: str,
+        shaft: str,
+        constraint_type: ConstraintType,
     ):
         self.name = name
         self.body_a = body_a
         self.body_b = body_b
+        self.shaft = shaft
         self.constraint_type = constraint_type
 
     def get_multiplier_names(self) -> Tuple[str]:
@@ -72,9 +79,14 @@ class TwoBodyConstraint(Constraint):
     ):
         body_b_id = param.rigid_body_param.names.index(self.body_b)
         body_a_id = param.rigid_body_param.names.index(self.body_a)
+        shaft_id = param.rigid_body_param.names.index(self.shaft)
         constraint_id = param.constraint_param.names.index(self.name)
-        return TwoBodyConstraint.func(
-            param, state, (body_a_id, body_b_id), constraint_id, self.constraint_type
+        return TwoBodyShaftConstraint.func(
+            param,
+            state,
+            (body_a_id, body_b_id, shaft_id),
+            constraint_id,
+            self.constraint_type,
         )
 
     @jit
@@ -88,11 +100,12 @@ class TwoBodyConstraint(Constraint):
         """
         C
         """
-        body_a_id, body_b_id = body_ids
+        body_a_id, body_b_id, shaft_id = body_ids
         body_b_pos = state.conf.pos[body_b_id]
         body_b_rot = state.conf.rot[body_b_id]
         body_a_pos = state.conf.pos[body_a_id]
         body_a_rot = state.conf.rot[body_a_id]
+        shaft_conf = state.conf.scalar[shaft_id]
 
         d_a, u_a, v_a, w_a = get_frame_transform(
             param.constraint_param.frame_a, constraint_id, body_a_pos, body_a_rot
@@ -128,14 +141,14 @@ class TwoBodyConstraint(Constraint):
         r_b = body_b_pos + d_b
         r_delta = r_a - r_b
         v_a = math.rotation_matrix(frame_a_rot)[:, 1]
-        free_prismatic = jnp.dot(v_a, r_delta)
+        free_prismatic = jnp.dot(v_a, r_delta) - shaft_conf
 
         # For hinge
         frame_a_rot_inv = math.conjugate(frame_a_rot)
         delta_rotation = math.quat_mul(frame_a_rot_inv, frame_b_rot)
         axis_angle = math.to_rotation_vector(delta_rotation)
         axis = jnp.array([1.0, 0.0, 0.0])
-        free_hinge = -jnp.dot(axis_angle, axis)
+        free_hinge = -jnp.dot(axis_angle, axis) - shaft_conf
 
         hinge_constraint = jnp.block(
             [spherical, dot1_1[None], dot1_2[None], free_hinge[None]]
@@ -153,11 +166,12 @@ class TwoBodyConstraint(Constraint):
         constraint_id: Union[int, jax.Array],
         constraint_type: Union[ConstraintType, jax.Array],
     ) -> jax.Array:
-        body_a_id, body_b_id = body_ids
+        body_a_id, body_b_id, shaft_id = body_ids
         body_b_pos = state.conf.pos[body_b_id]
         body_b_rot = state.conf.rot[body_b_id]
         body_a_pos = state.conf.pos[body_a_id]
         body_a_rot = state.conf.rot[body_a_id]
+        shaft_conf = state.conf.scalar[shaft_id]
 
         d_a, u_a, v_a, w_a = get_frame_transform(
             param.constraint_param.frame_a, constraint_id, body_a_pos, body_a_rot
@@ -191,6 +205,7 @@ class TwoBodyConstraint(Constraint):
             [
                 jnp.concatenate([spherical_a, dot1_1_a, dot1_2_a, u_a_tangent_a]),
                 jnp.concatenate([spherical_b, dot1_1_b, dot1_2_b, u_a_tangent_b]),
+                jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, -1.0])[:, None],
             ],
             axis=None,
         ) * (constraint_type == 0)
@@ -202,6 +217,7 @@ class TwoBodyConstraint(Constraint):
                 jnp.concatenate(
                     [dot2_1_b, dot2_2_b, dot1_1_b, dot1_2_b, dot1_3_b, dot2_3_b]
                 ),
+                jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, -1.0]),
             ],
             axis=None,
         ) * (constraint_type == 1)

@@ -11,13 +11,7 @@ from ajx.definitions import (
     GeneralizedVelocity,
 )
 from ajx.pre_step_modifiers import PreStepModifier
-from ajx.constraints import (
-    TwoBodyConstraint,
-    OneBodyConstraint,
-    Constraint,
-    TwoBodyShaftConstraint,
-    GearConstraint,
-)
+from ajx.constraints import TwoBodyConstraint, OneBodyConstraint, Constraint
 from ajx.sensors import Sensor
 from typing import Dict, List, Tuple, Optional
 from loguru import logger
@@ -465,70 +459,32 @@ class Simulation:
         for identifier, first_index, constraint_group in constraint_group_list:
             # These dicts are required if we want to replace the for-loop above with a jax.lax loop
             n_bodies = {
-                "TwoBodyShaftConstraint": TwoBodyShaftConstraint.get_num_bodies(),
                 "TwoBodyConstraint": TwoBodyConstraint.get_num_bodies(),
                 "OneBodyConstraint": OneBodyConstraint.get_num_bodies(),
-                "GearConstraint": GearConstraint.get_num_bodies(),
             }
             c_func = {
-                "TwoBodyShaftConstraint": TwoBodyShaftConstraint.func,
                 "TwoBodyConstraint": TwoBodyConstraint.func,
                 "OneBodyConstraint": OneBodyConstraint.func,
-                "GearConstraint": GearConstraint.func,
             }
             jac_func = {
-                "TwoBodyShaftConstraint": TwoBodyShaftConstraint.jacobian,
                 "TwoBodyConstraint": TwoBodyConstraint.jacobian,
                 "OneBodyConstraint": OneBodyConstraint.jacobian,
-                "GearConstraint": GearConstraint.jacobian,
-            }
-            operand_shapes = {
-                "TwoBodyShaftConstraint": (6, 6, 1),
-                "TwoBodyConstraint": (6, 6),
-                "OneBodyConstraint": (6,),
-                "GearConstraint": (1,),
-            }
-            constrained_degrees = {
-                "TwoBodyShaftConstraint": 6,
-                "TwoBodyConstraint": 6,
-                "OneBodyConstraint": 6,
-                "GearConstraint": 1,
-            }
-            constraint_param_dict = {
-                "TwoBodyShaftConstraint": param.constraint_param,
-                "TwoBodyConstraint": param.constraint_param,
-                "OneBodyConstraint": param.constraint_param,
-                "GearConstraint": param.scalar_constraint_param,
-            }
-            index_subtract = {
-                "TwoBodyShaftConstraint": 0,
-                "TwoBodyConstraint": 0,
-                "OneBodyConstraint": 0,
-                "GearConstraint": param.constraint_param.compliance.shape[0],
             }
 
             # Get the body indices (integers) from body names (strings)
-            rb_names_ext = (
-                *param.rigid_body_param.names,
-                *param.scalar_body_param.names,
-            )
             body_ids = tuple(
                 jnp.array(
                     [
-                        rb_names_ext.index(constraint.bodies[i])
+                        param.rigid_body_param.names.index(constraint.bodies[i])
                         for constraint in constraint_group
                     ]
                 )
                 for i in range(n_bodies[identifier])
             )
             # Get the constraint indices (integers) from constraint names (strings)
-            constraint_names_ext = (
-                *param.constraint_param.names,
-                *param.scalar_constraint_param.names,
-            )
             constraint_ids = jnp.array(
                 [
-                    constraint_names_ext.index(constraint.name)
+                    param.constraint_param.names.index(constraint.name)
                     for constraint in constraint_group
                 ]
             )
@@ -562,21 +518,19 @@ class Simulation:
 
             # Get the index slice corresponding to this constraint group
             # This slice is used to constraint parameters
-            first_index = first_index - index_subtract[identifier]
             group_size = len(constraint_group)
             idx_slice = slice(first_index, first_index + group_size)
 
             # Get the constraint parameters
-            constraint_param = constraint_param_dict[identifier]
-            tau = constraint_param.damping[idx_slice]
-            epsilon = constraint_param.compliance[idx_slice]
-            target = constraint_param.target[idx_slice]
+            tau = param.constraint_param.damping[idx_slice]
+            epsilon = param.constraint_param.compliance[idx_slice]
+            target = param.constraint_param.target[idx_slice]
             viscous_compliance = epsilon
             alpha = 1 / (1 + 4 * tau * self.h_inv)
             holonomic_regularization = 4 * epsilon * self.h_inv**2 * alpha
             nonholonomic_regularization = viscous_compliance * self.h_inv
 
-            not_locked = constraint_param.is_velocity[idx_slice]
+            not_locked = param.constraint_param.is_velocity[idx_slice]
             is_locked = jnp.logical_not(not_locked)
 
             offsets = default_offsets - target
@@ -587,46 +541,15 @@ class Simulation:
             )
 
             # Copy regularization of this constraint group to the full regularization vector
-            row_slice_end = (
-                row_slice_begin + constrained_degrees[identifier] * group_size
-            )
+            row_slice_end = row_slice_begin + 6 * group_size
             Sigma_data = Sigma_data.at[row_slice_begin:row_slice_end].set(
                 regularization.flatten()
             )
 
-            # Compute Jacobian times velocity (TODO: Consider abstraction in GeneralizedVelocity)
-            # proj_vel = G @ u = G1 @ u + G2 @ u + ... = [G1x ux G1z uz].T +
+            # Compute Jacobian times velocity
             jnp_body_ids = jnp.stack(body_ids, axis=1)
-
-            def stack_multiply(G_blocks, body_ids, gvel, gscalar):
-                dims = operand_shapes[identifier]
-                sizes = (
-                    jnp.concatenate(
-                        [
-                            jnp.ones([gvel.shape[0]], dtype=jnp.int64) * 6,
-                            jnp.ones([gscalar.shape[0]], dtype=jnp.int64),
-                        ]
-                    )
-                    - 6
-                )
-                offsets = jnp.cumulative_sum(sizes, include_initial=True)
-                gflat = jnp.concatenate([gvel.flatten(), gscalar])
-                offset = 0
-                results = []
-                for i, dim in enumerate(dims):
-                    cd = constrained_degrees[identifier]
-                    G = G_blocks[offset * cd : (offset + dim) * cd].reshape(cd, dim)
-
-                    body_id = body_ids[i]
-                    vel_begin = offsets[body_id]
-                    vel_dim = operand_shapes[identifier][i]
-                    vel = jax.lax.dynamic_slice(gflat, (vel_begin,), (vel_dim,))
-                    results.append(G @ vel)
-
-                return jnp.stack(results)
-
-            proj_vels = jax.vmap(stack_multiply, in_axes=(0, 0, None, None))(
-                G_blocks, jnp_body_ids, state.gvel.data, state.gvel.scalar
+            proj_vels = jax.vmap(jax.vmap(jnp.matmul))(
+                G_blocks, state.gvel.data[jnp_body_ids]
             )
             proj_vel = jnp.sum(proj_vels, axis=1)
 

@@ -16,6 +16,11 @@ class RigidBody:
 
 
 @struct.dataclass
+class ScalarBody:
+    name: Tuple[str]
+
+
+@struct.dataclass
 class Transform(ParameterNode):
     """Dataclass for a transform by position and rotation"""
 
@@ -32,6 +37,7 @@ class Configuration(ParameterNode):
 
     pos: jax.Array
     rot: jax.Array
+    scalar: jax.Array = struct.field(default_factory=lambda: jnp.zeros([0]))
 
     def retract(self, update: jax.Array) -> Configuration:
         assert update.shape == (
@@ -71,6 +77,7 @@ class Configuration(ParameterNode):
 @struct.dataclass
 class GeneralizedVelocity(ParameterNode):
     data: jax.Array
+    scalar: jax.Array = struct.field(default_factory=lambda: jnp.zeros([0]))
 
     @property
     def vel(self):
@@ -128,7 +135,7 @@ class ConstraintParameters(ParameterNode):
         holonomic_compliance = jnp.array([compliance] * 5)[None]
         holonomic_damping = jnp.array([damping] * 5)[None]
         viscous_compliance = jnp.array([1.0 / b])[None]
-        ignored_damping = jnp.array([0.0])[None]
+        ignored_damping = jnp.array([damping])[None]
         target = jnp.zeros(6)[None]
         compliance = jnp.concatenate([holonomic_compliance, viscous_compliance], axis=1)
         damping = jnp.concatenate([holonomic_damping, ignored_damping], axis=1)
@@ -145,6 +152,43 @@ class ConstraintParameters(ParameterNode):
             target=target,
             is_velocity=is_velocity,
         )
+
+    # @classmethod
+    # def create_w_shaft(
+    #     cls,
+    #     frame_a: Frame,
+    #     frame_b: Frame,
+    #     compliance: float,
+    #     damping: float,
+    #     b: float,
+    #     name: str,
+    # ):
+    #     holonomic_compliance = jnp.array([compliance] * 5)[None]
+    #     shaft_compliance = jnp.array([compliance])[None]
+    #     holonomic_damping = jnp.array([damping] * 5)[None]
+    #     viscous_compliance = jnp.array([1.0 / b])[None]
+    #     ignored_damping = jnp.array([damping])[None]
+    #     shaft_damping = jnp.array([damping])[None]
+    #     target = jnp.zeros(6)[None]
+    #     compliance = jnp.concatenate(
+    #         [holonomic_compliance, viscous_compliance, shaft_compliance], axis=1
+    #     )
+    #     damping = jnp.concatenate(
+    #         [holonomic_damping, ignored_damping, shaft_damping], axis=1
+    #     )
+    #     is_velocity = jnp.array(
+    #         [False, False, False, False, False, True, False], dtype=bool
+    #     )[None]
+    #     names = (name,)
+    #     return cls(
+    #         names,
+    #         frame_a=frame_a.to_frames(),
+    #         frame_b=frame_b.to_frames(),
+    #         compliance=compliance,
+    #         damping=damping,
+    #         target=target,
+    #         is_velocity=is_velocity,
+    #     )
 
     @classmethod
     def create_empty(cls):
@@ -168,16 +212,25 @@ class ConstraintParameters(ParameterNode):
         offset: float,
         name: str,
     ):
-        frame_a_data = frame_a.concat()
-        frame_b_data = frame_b.concat()
-        holonomic_compliance = jnp.array([compliance] * 6)
-        damping = jnp.array([damping] * 6)
-        target = jnp.zeros(5)
-        offset = jnp.array([offset])
-        new_data = jnp.concatenate(
-            [frame_a_data, frame_b_data, holonomic_compliance, damping, target, offset]
+        compliance = jnp.array([compliance] * 6)[None]
+        damping = jnp.array([damping] * 6)[None]
+        target = jnp.zeros(5)[None]
+        offset = jnp.array([offset])[None]
+        target = jnp.concatenate([target, offset], axis=1)
+
+        is_velocity = jnp.array([False, False, False, False, False, False], dtype=bool)[
+            None
+        ]
+        names = (name,)
+        return cls(
+            names,
+            frame_a=frame_a.to_frames(),
+            frame_b=frame_b.to_frames(),
+            compliance=compliance,
+            damping=damping,
+            target=target,
+            is_velocity=is_velocity,
         )
-        return cls(name, new_data)
 
     def insert(self, src):
         new = self.copy()
@@ -218,6 +271,58 @@ class ConstraintParameters(ParameterNode):
 
 
 @struct.dataclass
+class ScalarConstraintParameters(ParameterNode):
+    # Fixed
+    names: Tuple[str] = struct.field(pytree_node=False)
+
+    # Dynamic
+    offset_a: jax.Array
+    offset_b: jax.Array
+    gear_ratio: jax.Array
+    compliance: jax.Array  # Viscous compliance for velocity constrained dofs
+    damping: jax.Array  # Ignored for velocity constrained dofs
+    target: jax.Array  # Target velocity for velocity constrained dofs
+    is_velocity: jax.Array  # Bools set to true for velocity constrained dofs
+
+    @classmethod
+    def create(
+        cls,
+        offset_a: jax.Array,
+        offset_b: jax.Array,
+        gear_ratio: jax.Array,
+        is_locked: jax.Array,
+        compliance: float,
+        damping: float,
+        name: str,
+    ):
+        is_velocity = jnp.logical_not(jnp.array([is_locked], dtype=bool)[None])
+        names = (name,)
+        return cls(
+            names,
+            offset_a=jnp.array(offset_a)[None],
+            offset_b=jnp.array(offset_b)[None],
+            gear_ratio=jnp.array(gear_ratio)[None],
+            compliance=jnp.array([compliance])[None],
+            damping=jnp.array([damping])[None],
+            target=jnp.zeros(1)[None],
+            is_velocity=is_velocity,
+        )
+
+    @classmethod
+    def create_empty(cls):
+        return cls(
+            names=(),
+            offset_a=jnp.array([0]),
+            offset_b=jnp.array([0]),
+            gear_ratio=jnp.array([0]),
+            compliance=jnp.array([0]),
+            damping=jnp.array([0]),
+            target=jnp.array([0]),
+            is_velocity=jnp.array([0]),
+        )
+
+
+@struct.dataclass
 class RigidBodyParameters(ParameterNode):
     # Fixed
     names: Tuple[str] = struct.field(pytree_node=False)
@@ -248,3 +353,26 @@ class RigidBodyParameters(ParameterNode):
         inertia = jnp.zeros(6).at[diag_indices].set(inertia_diag)[None]
         names = (name,)
         return cls(names, mass, mc, inertia)
+
+
+@struct.dataclass
+class ScalarBodyParameters(ParameterNode):
+    # Fixed
+    names: Tuple[str] = struct.field(pytree_node=False)
+
+    has_state: jax.Array
+    inertia: jax.Array
+
+    @classmethod
+    def create(cls, inertia: jax.Array, has_state: bool, name: str):
+        names = (name,)
+        has_state = jnp.array(has_state)
+        inertia = jnp.array(inertia)
+        return cls(names, has_state[None], inertia[None])
+
+    @classmethod
+    def create_empty(cls):
+        names = ()
+        has_state = jnp.zeros([0, 1])
+        inertia = jnp.zeros([0, 1])
+        return cls(names, has_state, inertia)

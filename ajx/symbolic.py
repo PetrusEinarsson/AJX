@@ -1,6 +1,6 @@
 import numpy as np
 from ajx.constraints import Constraint
-from ajx.definitions import RigidBody
+from ajx.definitions import RigidBody, ScalarBody
 from typing import Tuple
 
 
@@ -69,15 +69,20 @@ def get_schur_fillin_sparsity(constraint_list: Tuple[Constraint], lower: bool = 
 
 def get_constraint_sparsity(
     rigid_body_list: Tuple[RigidBody],
+    scalar_body_list: Tuple[ScalarBody],
     constraint_list: Tuple[Constraint],
     rigid_body_names: Tuple[str],
+    scalar_body_names: Tuple[str],
 ):
 
     nc = len(constraint_list)
     nb = len(rigid_body_list)
+    nsb = len(scalar_body_list)
     # Pre-Step 4: Compute reduction scattering indexation and allocate data for G
     row_sizes = np.array([c.dof for c in constraint_list])
-    col_sizes = np.ones(nb, dtype=int) * 6
+    col_sizes_rb = np.ones(nb, dtype=int) * 6
+    col_sizes_sb = np.ones(nsb, dtype=int) * 1
+    col_sizes = np.concatenate([col_sizes_rb, col_sizes_sb])
 
     G_rsi_dict = (
         {}
@@ -88,16 +93,20 @@ def get_constraint_sparsity(
     counter = 0
     for row in range(nc):
         constraint = constraint_list[row]
-        body_ids = []
         for body in constraint.bodies:
-            if body not in rigid_body_names:
+            dim = -1
+            if body in rigid_body_names:
+                body_id = rigid_body_names.index(body)
+                dim = 6
+            elif body in scalar_body_names:
+                body_id = scalar_body_names.index(body) + nb
+                dim = 1
+            else:
                 raise Exception(f"{body} not found")
-            body_ids.append(rigid_body_names.index(body))
 
-        for i, body_id in enumerate(body_ids):
             col_indices.append(body_id)
             G_rsi_dict[(row, body_id)] = cumulative_pos
-            cumulative_pos += 6 * row_sizes[row]
+            cumulative_pos += dim * row_sizes[row]
             counter += 1
 
         row_ptr.append(counter)

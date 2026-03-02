@@ -3,7 +3,12 @@ from __future__ import annotations
 import sys
 import jax
 
-from ajx.definitions import ConstraintParameters, RigidBodyParameters
+from ajx.definitions import (
+    ConstraintParameters,
+    RigidBodyParameters,
+    ScalarBodyParameters,
+    ScalarConstraintParameters,
+)
 
 
 from ajx.tree_util import ParameterNode
@@ -18,6 +23,12 @@ class SimulationParameters(ParameterNode):
     rigid_body_param: RigidBodyParameters
     constraint_param: ConstraintParameters
     sparse_param: ParameterNode
+    scalar_body_param: ScalarBodyParameters = struct.field(
+        default_factory=lambda: ScalarBodyParameters.create_empty()
+    )
+    scalar_constraint_param: ScalarConstraintParameters = struct.field(
+        default_factory=lambda: ScalarConstraintParameters.create_empty()
+    )
 
     # Static
     tangent_restrictions: Tuple[str] = struct.field(pytree_node=False, default=tuple())

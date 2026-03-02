@@ -178,17 +178,11 @@ class OneBodyConstraint(Constraint):
         dot2_3_b = jnp.block([-v_a[None], jnp.zeros([1, 3])])
         u_a_tangent_b = jnp.block([jnp.zeros([1, 3]), -u_a])
 
-        jac_hinge = jnp.stack(
-            [
-                jnp.concatenate([spherical_b, dot1_1_b, dot1_2_b, u_a_tangent_b]),
-            ]
+        jac_hinge = jnp.concatenate(
+            [spherical_b, dot1_1_b, dot1_2_b, u_a_tangent_b], axis=None
         ) * (constraint_type == 0)
-        jac_prismatic = jnp.stack(
-            [
-                jnp.concatenate(
-                    [dot2_1_b, dot2_2_b, dot1_1_b, dot1_2_b, dot1_3_b, dot2_3_b]
-                ),
-            ]
+        jac_prismatic = jnp.concatenate(
+            [dot2_1_b, dot2_2_b, dot1_1_b, dot1_2_b, dot1_3_b, dot2_3_b], axis=None
         ) * (constraint_type == 1)
 
         return jac_hinge + jac_prismatic
