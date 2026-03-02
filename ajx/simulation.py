@@ -118,7 +118,7 @@ class Simulation:
             state, param = component.update_params(state, u, param)
         f_ext = self._gravity_gyro_force3D(state, param)
 
-        return self._force_solver(state, f_ext, param)
+        return state, self._force_solver(state, f_ext, param)
 
     @partial(jit, static_argnums=0)
     def post_step(self, state: State, gvel_next: GeneralizedVelocity) -> State:

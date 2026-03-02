@@ -50,6 +50,7 @@ class GraphicalEnvironmentBase(DirectObject):
         self.game = Game(framerate=1 / self.timestep)
 
         self.step = jit(env.step)
+        self.observe = jit(env.observe_state)
 
         self.physics_is_active = True
         self.replay_active = False
@@ -77,8 +78,8 @@ class GraphicalEnvironmentBase(DirectObject):
             if type(raw_data).__name__ == "TrajectoryDataset":
                 self.state_sequence = raw_data.initial_states
             else:
-                self.state_sequence = env.xarray_to_trajectory(
-                    raw_data["trajectory"].states
+                self.state_sequence = jax.vmap(env.unflatten)(
+                    raw_data["rollout"].trajectory
                 )
 
     def create_graphics(self, initial_state):
@@ -101,71 +102,18 @@ class GraphicalEnvironmentBase(DirectObject):
         for geometry in self.environment.extra_geometry:
             geometry.create_node(self.game)
 
-        self.text_toggle_physics = OnscreenText(
-            text="p: Toggle physics",
-            style=1,
-            fg=(1, 1, 1, 1),
-            pos=(0.06, -0.08),
-            align=TextNode.ALeft,
-            scale=0.05,
-            parent=base.a2dTopLeft,
-        )
-
-        self.text_toggle_controller = OnscreenText(
-            text="c: Toggle controller",
-            style=1,
-            fg=(1, 1, 1, 1),
-            pos=(0.06, -0.14),
-            align=TextNode.ALeft,
-            scale=0.05,
-            parent=base.a2dTopLeft,
-        )
-
-        self.text_toggle_playback = OnscreenText(
-            text="t: Toggle playback",
-            style=1,
-            fg=(1, 1, 1, 1),
-            pos=(0.06, -0.20),
-            align=TextNode.ALeft,
-            scale=0.05,
-            parent=base.a2dTopLeft,
-        )
-        self.text_display_observations1 = OnscreenText(
-            text="",
-            style=1,
-            fg=(1, 1, 1, 1),
-            pos=(0.06, -0.26),
-            align=TextNode.ALeft,
-            scale=0.05,
-            parent=base.a2dTopLeft,
-        )
-        self.text_display_observations2 = OnscreenText(
-            text="",
-            style=1,
-            fg=(1, 1, 1, 1),
-            pos=(0.06, -0.32),
-            align=TextNode.ALeft,
-            scale=0.05,
-            parent=base.a2dTopLeft,
-        )
-        self.text_display_observations3 = OnscreenText(
-            text="",
-            style=1,
-            fg=(1, 1, 1, 1),
-            pos=(0.06, -0.38),
-            align=TextNode.ALeft,
-            scale=0.05,
-            parent=base.a2dTopLeft,
-        )
-        self.text_display_observations4 = OnscreenText(
-            text="",
-            style=1,
-            fg=(1, 1, 1, 1),
-            pos=(0.06, -0.44),
-            align=TextNode.ALeft,
-            scale=0.05,
-            parent=base.a2dTopLeft,
-        )
+        self.text_displays = [
+            OnscreenText(
+                text="",
+                style=1,
+                fg=(1, 1, 1, 1),
+                pos=(0.06, -0.08 - 0.06 * i),
+                align=TextNode.ALeft,
+                scale=0.05,
+                parent=base.a2dTopLeft,
+            )
+            for i in range(10)
+        ]
         base.camLens.setNearFar(0.01, 200)
 
         # Load the skybox
@@ -341,6 +289,10 @@ class GraphicalEnvironmentBase(DirectObject):
         def toggle_physics():
             self.physics_is_active = not self.physics_is_active
 
+        def step_physics():
+            self.update_physics()
+            self.update_geometry()
+
         def toggle_replay():
             self.replay_active = not self.replay_active
 
@@ -354,6 +306,7 @@ class GraphicalEnvironmentBase(DirectObject):
         self.accept("p", toggle_physics)
         self.accept("c", toggle_controller)
         self.accept("t", toggle_replay)
+        self.accept("s", step_physics)
 
         self.accept("l", update_key_map, ["l", True])
         self.accept("l-up", update_key_map, ["l", False])
@@ -381,6 +334,7 @@ class GraphicalEnvironmentBase(DirectObject):
             self.k = self.reset_k
         else:
             self.state = self.initial_state
+            self.observation = self.observe(self.state, -self.u, self.env_param)
 
     def update(self, task):
         self.pre_update(task)
@@ -389,17 +343,20 @@ class GraphicalEnvironmentBase(DirectObject):
             self.update_physics()
         elif self.replay_active:
             self.update_trajectory()
-            self.observation = self.observe(self.state, None, self.env_param)
+            self.observation = self.observe(self.state, -self.u, self.env_param)
 
+        self.update_geometry()
+        if self.physics_is_active and self.replay_active:
+            self.k += 1
+        self.counter += 1
+
+        return task.cont
+
+    def update_geometry(self):
         info_list = self.environment.observation_strings(self.observation)
         if len(info_list) > 0:
-            self.text_display_observations1.setText(info_list[0])
-        if len(info_list) > 1:
-            self.text_display_observations2.setText(info_list[1])
-        if len(info_list) > 2:
-            self.text_display_observations3.setText(info_list[2])
-        if len(info_list) > 3:
-            self.text_display_observations4.setText(info_list[3])
+            for i in range(min(len(info_list), len(self.text_displays))):
+                self.text_displays[i].setText(info_list[i])
         # Very slow...
         sim = 2
         r = (self.counter * sim) % len(self.environment.sim.rigid_body_list)
@@ -409,12 +366,6 @@ class GraphicalEnvironmentBase(DirectObject):
                 # assert g_name in self.geometry_dict
                 geometry = self.geometry_dict[g_name]
                 geometry.update_node(self.state.conf.pos[i], self.state.conf.rot[i])
-
-        if self.physics_is_active and self.replay_active:
-            self.k += 1
-        self.counter += 1
-
-        return task.cont
 
     def pre_update(self, task):
         self.u = self.environment.control_func(
