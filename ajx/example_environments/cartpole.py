@@ -4,7 +4,9 @@ from ajx.example_environments.environment import Environment
 
 import ajx.example_graphics.geometry as geometry
 
-CartPoleSparseParam = create_parameter_node("CartPoleSparseParam", ("motor",))
+CartPoleSparseParam = create_parameter_node(
+    "CartPoleSparseParam", ("motor", "offset_param")
+)
 
 
 class CartPole(Environment):
@@ -102,8 +104,8 @@ class CartPole(Environment):
 
         self.pre_step_modifiers = (motor,)
 
-        self.distance_sensor = PrismaticEncoder("distance_sensor", self.prismatic)
-        self.rotary_encoder = RotaryEncoderHingeMounted("rotary_encoder", self.hinge)
+        self.distance_sensor = LinearEncoder("linear_encoder", self.prismatic)
+        self.rotary_encoder = RotaryEncoder("rotary_encoder", self.hinge)
 
         self.sensors = (
             self.distance_sensor,
@@ -122,7 +124,14 @@ class CartPole(Environment):
             jnp.array([0.0, -9.82, 0.0]),
             rb_param,
             constraint_param,
-            sparse_param=CartPoleSparseParam(motor=motor_param),
+            sparse_param=CartPoleSparseParam(
+                motor=motor_param,
+                offset_param=OffsetParameters(
+                    ("linear_encoder", "rotary_encoder"),
+                    (0.0, 0.0),
+                    (1.0, 1.0),
+                ),
+            ),
         )
 
         self.geometry_list = (self.cart_box, self.pendulum_box)

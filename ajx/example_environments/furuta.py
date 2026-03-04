@@ -8,7 +8,7 @@ from typing import Optional
 import ajx.example_graphics.geometry as geometry
 
 FurutaSparseParam = create_parameter_node(
-    "FurutaSparseParam", ("electric_motor", "gravity")
+    "FurutaSparseParam", ("electric_motor", "gravity", "offset_param")
 )
 
 
@@ -116,8 +116,8 @@ class Furuta(Environment):
 
         pre_step_modifiers = (electric_motor,)
 
-        rotary_decoder1 = RotaryEncoderHingeMounted("rotary_encoder1", self.hinge1)
-        rotary_decoder2 = RotaryEncoderHingeMounted("rotary_encoder2", self.hinge2)
+        rotary_decoder1 = RotaryEncoder("rotary_encoder1", self.hinge1)
+        rotary_decoder2 = RotaryEncoder("rotary_encoder2", self.hinge2)
 
         sensors = (rotary_decoder1, rotary_decoder2)
 
@@ -139,6 +139,11 @@ class Furuta(Environment):
                 gravity=TiltGravityParam(
                     jnp.array([0.0, -9.82, 0.0]),
                     jnp.array([1.0, 0.0, 0.0, 0.0]),
+                ),
+                offset_param=OffsetParameters(
+                    ("rotary_encoder1", "rotary_encoder2"),
+                    (0.0, 0.0),
+                    (1.0, 1.0),
                 ),
             ),
         )
