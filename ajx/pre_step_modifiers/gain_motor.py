@@ -37,10 +37,12 @@ class GainMotor2(PreStepModifier):
         body_ids = tuple(
             param.rigid_body_param.names.index(body) for body in self.constraint.bodies
         )
-        constraint_id = param.constraint_param.names.index(self.constraint.name)
+        constraint_ids = (param.constraint_param.names.index(self.constraint.name),)
         jac = self.constraint.__class__.jacobian(
-            param, state, body_ids, constraint_id, self.constraint.constraint_type
-        ).reshape(len(self.constraint.bodies), self.constraint.dof, -1)
+            param, state, body_ids, constraint_ids, self.constraint.constraint_type
+        ).reshape(
+            len(self.constraint.bodies), self.constraint.get_constrained_degrees(), -1
+        )
         # jac = self.constraint.jacobian(param, state) # TODO: Why is this not working?
         omega = sum(
             [
