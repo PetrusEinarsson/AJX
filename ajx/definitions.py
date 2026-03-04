@@ -71,7 +71,8 @@ class Configuration(ParameterNode):
     def log_map(self, other: Configuration):
         rot_delta = vmap(math.quat_residual)(self.rot, other.rot)
         pos_delta = self.pos - other.pos
-        return jnp.concatenate([pos_delta.flatten(), rot_delta.flatten()])
+        scalar_delta = self.scalar - other.scalar
+        return jnp.concatenate([pos_delta, rot_delta, scalar_delta], axis=None)
 
 
 @struct.dataclass
