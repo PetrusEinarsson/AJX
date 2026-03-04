@@ -25,6 +25,8 @@ class SVBDMatrix(BlockMatrixBase):
         for group in self.block_sizes:
             block_dim, n_blocks = group
             size = block_dim * block_dim * n_blocks
+            if size == 0:
+                continue
             data = self.data[ptr : ptr + size].reshape(n_blocks, block_dim, block_dim)
             dense_group = jax.scipy.linalg.block_diag(*data)
             dense_groups.append(dense_group)
