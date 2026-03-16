@@ -199,11 +199,11 @@ class Square:
         self.name = name
         self.half_extent_x = half_extent_x
         self.half_extent_z = half_extent_z
-        if translation:
+        if not translation is None:
             self.translation = translation
         else:
             self.translation = (0.0, 0.0, 0.0)
-        if rotation:
+        if not rotation is None:
             self.rotation = rotation
         else:
             self.rotation = (1.0, 0.0, 0.0, 0.0)
@@ -227,21 +227,16 @@ class Square:
         texcoord = GeomVertexWriter(vdata, "texcoord")
         tris = GeomTriangles(Geom.UHDynamic)
 
-        x1 = -self.half_extent_x + self.translation[0]
-        x2 = self.half_extent_x + self.translation[0]
-        y1 = self.translation[1]
-        y2 = self.translation[1]
-        z1 = -self.half_extent_z + self.translation[2]
-        z2 = self.half_extent_z + self.translation[2]
+        x1 = -self.half_extent_x
+        x2 = self.half_extent_x
+        y1 = 0.0
+        y2 = 0.0
+        z1 = -self.half_extent_z
+        z2 = self.half_extent_z
 
         append_square(
             tris, vertex, normal, texcolor, texcoord, x1, y1, z1, x2, y2, z2, self.color
         )
-
-        # Quads aren't directly supported by the Geom interface
-        # you might be interested in the CardMaker class if you are
-        # interested in rectangle though
-
         square = Geom(vdata)
         square.addPrimitive(tris)
         snode1 = GeomNode(self.name)
@@ -249,7 +244,7 @@ class Square:
         new = game.attachNewNode(snode1)
         new.setTwoSided(True)
         self.node = new
-        # self.node.setPosQuat(Vec3(*self.translation), Quat(*self.rotation))
+        self.node.setPosQuat(Vec3(*self.translation), Quat(*self.rotation))
 
     def update_node(self, pos, rot):
         self.node.setPosQuat(Vec3(*pos), Quat(*rot))

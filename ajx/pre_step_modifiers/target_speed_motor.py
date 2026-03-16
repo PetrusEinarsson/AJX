@@ -9,9 +9,14 @@ class TargetSpeedMotor(PreStepModifier):
     name: str
     constraint: Constraint
     idx: int
+    target_dof: int
 
     def update_params(self, state, u, param):
         target = u[self.idx]
         return state, param.tree_replace(
-            {"constraint_param": {"target": {self.constraint.name: {5: target}}}}
+            {
+                "constraint_param": {
+                    "target": {self.constraint.name: {self.target_dof: target}}
+                }
+            }
         )

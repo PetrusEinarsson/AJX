@@ -19,6 +19,9 @@ class CartPole(Environment):
         self.dynamic_residual_names = self.get_state_residual_names()
         self.control_names = ["motor"]
 
+        self.camera_pos = jnp.array([0.0, 30.0, 0.0])
+        self.camera_rot = math.quat_from_axis_angle(jnp.array([0.0, 0.0, 1.0]), 0.0)
+
         super().post_init()
 
     def _build_sim(self, sim_settings):
@@ -26,6 +29,7 @@ class CartPole(Environment):
         cart_y = 0.4
         half_length = 1.24
         cart_half_height = 0.4
+        cart_center = thin + cart_y / 2
         self.cart_box = geometry.Box(
             "cart_box",
             0.5,
@@ -144,7 +148,7 @@ class CartPole(Environment):
                 30,
                 0.05,
                 0.2,
-                translation=(0.0, -4.5, 0.0),
+                translation=(-cart_half_height, cart_center, 0.0),
                 color=[0.4, 0.1, 0.1],
             ),
         )
@@ -157,7 +161,7 @@ class CartPole(Environment):
         x = observation[0]
         theta = observation[1]
         cart_transform = self.prismatic.place_other(param, world_transform, x)
-        pendulum_transform = self.hinge.place_other(param, cart_transform, theta)
+        pendulum_transform = self.hinge.place_other(5, param, cart_transform, theta)
         return Configuration.concatenate(
             [cart_transform.to_configuration(), pendulum_transform.to_configuration()]
         )

@@ -279,6 +279,7 @@ class EnvironmentScene:
     def reset(self):
         self.state = self.initial_state
         self.observation = self.observe(self.state, -self.u, self.env_param)
+        self.update_geometry()
 
     def update(self, key_map):
         self.pre_update(key_map)
@@ -322,6 +323,7 @@ class EnvironmentScene:
             rot = rot_np[i]
             q = Quat(*rot)
             for g_name in rb.geometry:
+                # TODO: Trigger reset and print error message if NaN value is encountered
                 geo_dict[g_name].node.setPosQuat(Vec3(*pos), q)
 
     def pre_update(self, key_map):

@@ -67,7 +67,7 @@ class Furuta(Environment):
             name="hinge1",
             # body_a=None,
             body="arm1",
-            constraint_type=ConstraintType.PRISMATIC.value,
+            constraint_type=ConstraintType.HINGE.value,
         )
         rotation1 = math.quat_from_axis_angle(jnp.array([0.0, 0.0, 1.0]), 0.5 * jnp.pi)
         rotation2 = math.quat_from_axis_angle(jnp.array([1.0, 0.0, 0.0]), -0.0 * jnp.pi)
@@ -96,7 +96,7 @@ class Furuta(Environment):
             name="hinge2",
             body_a="arm1",
             body_b="arm2",
-            constraint_type=ConstraintType.PRISMATIC.value,
+            constraint_type=ConstraintType.HINGE.value,
         )
         hinge2_param = ConstraintParameters.create(
             free_degree=5,
@@ -175,7 +175,7 @@ class Furuta(Environment):
         theta1 = observation[0]
         theta2 = observation[1]
         arm1_transform = self.hinge1.place_other(param, world_transform, theta1)
-        arm2_transform = self.hinge2.place_other(param, arm1_transform, theta2)
+        arm2_transform = self.hinge2.place_other(5, param, arm1_transform, theta2)
         return Configuration.concatenate(
             [arm1_transform.to_configuration(), arm2_transform.to_configuration()]
         )

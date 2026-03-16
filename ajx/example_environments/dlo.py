@@ -275,7 +275,10 @@ class DLO(Environment):
         ]
 
         # point_set = [(i, offset) for offset in offsets for i in range(n)]
-        point_set = [(i, offset) for i in range(n) for offset in offsets]
+        temp_limit = 1
+        point_set = [
+            (i, offset) for i in range(max(n, temp_limit)) for offset in offsets
+        ]
         # point_set5 = [(i, jnp.array([-bl, 0.1, 0.1])) for i in range(n)]
         # point_set6 = [(i, jnp.array([-bl, 0.1, -0.1])) for i in range(n)]
         # point_set7 = [(i, jnp.array([-bl, -0.1, 0.1])) for i in range(n)]
@@ -314,9 +317,9 @@ class DLO(Environment):
         self.extra_geometry = [
             geometry.Square(
                 "ground",
-                1.0,
-                1.0,
-                (0.0, 0.0, -2.0),
+                400.0,
+                400.0,
+                translation=(bl * self.env_settings.n_bodies, 0.0, -100.0),
                 rotation=math.quat_from_axis_angle(
                     jnp.array([1.0, 0.0, 0.0]), jnp.pi / 2
                 ),
@@ -333,7 +336,7 @@ class DLO(Environment):
         body_transforms.append(self.first_lock.place_other(param, world_transform, 0))
         for i in range(self.env_settings.n_bodies - 1):
             new_transform = self.lock_joints[i].place_other(
-                param, body_transforms[-1], 0
+                0, param, body_transforms[-1], 0
             )
             body_transforms.append(new_transform)
         return Configuration.concatenate(

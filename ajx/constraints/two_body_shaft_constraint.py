@@ -10,21 +10,13 @@ from ajx.definitions import Transform, State
 from ajx.param import SimulationParameters
 from typing import Union, Tuple
 from functools import partial
-from ajx.constraints.base import Constraint, ConstraintType, get_frame_transform
+from ajx.constraints.base import (
+    Constraint,
+    ConstraintType,
+    get_frame_transform,
+    get_frame_transform_ext,
+)
 from ajx.constraints import TwoBodyConstraint
-
-
-@jit
-def get_frame_transform(frame, constraint_id, body_pos, body_rotation):
-    d0 = frame.position[constraint_id]
-    frame_rot0 = frame.rotation[constraint_id]
-    frame_rot = math.quat_mul(body_rotation, frame_rot0)
-    d = math.rotate_vector(body_rotation, d0)
-    u = math.rotation_matrix(frame_rot)[:, 0]
-    v = math.rotation_matrix(frame_rot)[:, 1]
-    w = math.rotation_matrix(frame_rot)[:, 2]
-
-    return d, u, v, w
 
 
 class TwoBodyShaftConstraint(Constraint):
@@ -147,23 +139,22 @@ class TwoBodyShaftConstraint(Constraint):
         body_a_rot = state.conf.rot[body_a_id]
         shaft_conf = state.conf.scalar[shaft_id]
 
-        d_a, u_a, v_a, w_a = get_frame_transform(
-            param.constraint_param.frame_a, parent_constraint_id, body_a_pos, body_a_rot
+        d_a, u_a, v_a, w_a, q_a = get_frame_transform_ext(
+            param.constraint_param.frame_a, constraint_id, body_a_pos, body_a_rot
         )
 
         d_b, u_b, v_b, w_b = get_frame_transform(
-            param.constraint_param.frame_b, parent_constraint_id, body_b_pos, body_b_rot
+            param.constraint_param.frame_b, constraint_id, body_b_pos, body_b_rot
         )
 
         r_a = body_a_pos + d_a
         r_b = body_b_pos + d_b
 
         spherical = r_a - r_b
+        R_a = math.rotation_matrix(q_a).T
+        co_spherical = R_a @ spherical  # math.rotate_vector(q_a, spherical)
         dot1_1 = jnp.dot(u_a, v_b)
         dot1_2 = jnp.dot(u_a, w_b)
-        dot1_3 = jnp.dot(w_a, v_b)
-        dot2_1 = jnp.dot(u_a, r_a - r_b)
-        dot2_2 = jnp.dot(w_a, r_a - r_b)
 
         # TODO: Copy and paste code. Computations are done twice...
         frame_a_pos0 = param.constraint_param.frame_a.position[parent_constraint_id]
@@ -179,10 +170,10 @@ class TwoBodyShaftConstraint(Constraint):
         # For prismatic
         r_a = body_a_pos + d_a
         r_b = body_b_pos + d_b
-        r_delta = r_a - r_b
-        v_a = math.rotation_matrix(frame_a_rot)[:, 1]
+        spherical = r_a - r_b
+        u_a = math.rotation_matrix(frame_a_rot)[:, 0]
         gear_ratio = param.scalar_constraint_param.gear_ratio[constraint_id]
-        free_prismatic = jnp.dot(v_a, r_delta) - gear_ratio * shaft_conf
+        free_prismatic = jnp.dot(u_a, spherical) - gear_ratio * shaft_conf
 
         # For hinge
         frame_a_rot_inv = math.conjugate(frame_a_rot)
@@ -226,8 +217,8 @@ class TwoBodyShaftConstraint(Constraint):
         r_a = body_a_pos + d_a
         r_b = body_b_pos + d_b
 
-        dot2_3_a = jnp.block([v_a[None], jnp.cross(v_a, r_a - r_b)])
-        dot2_3_b = jnp.block([-v_a[None], jnp.zeros([1, 3])])
+        dot2_3_a = jnp.block([u_a[None], jnp.cross(u_a, r_a - r_b)])
+        dot2_3_b = jnp.block([-u_a[None], jnp.zeros([1, 3])])
         u_a_tangent_a = jnp.block([jnp.zeros([1, 3]), u_a])
         u_a_tangent_b = jnp.block([jnp.zeros([1, 3]), -u_a])
 

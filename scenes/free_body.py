@@ -1,4 +1,5 @@
-from ajx.example_graphics.base import GraphicalEnvironmentBase
+from ajx.example_graphics.environment_scene import EnvironmentScene
+from ajx.example_graphics.application import Application
 
 from ajx.example_environments.free_body import FreeBody
 from ajx.simulation import SimulationSettings, Solver
@@ -15,5 +16,6 @@ if __name__ == "__main__":
 
     initial_state = environment.state_from_angular_velocity(angvel)
 
-    controller = GraphicalEnvironmentBase(environment, env_param, initial_state)
-    controller.run()
+    scene = EnvironmentScene(environment, env_param, initial_state)
+    app = Application(scene, 60, "default")
+    app.run()

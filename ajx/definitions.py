@@ -144,7 +144,7 @@ class ConstraintParameters(ParameterNode):
         target = jnp.zeros(6)[None]
         compliance = holonomic_compliance.at[:, free_degree].set(1.0 / b)
         damping = holonomic_damping.at[:, free_degree].set(ignored_damping)
-        is_velocity = jnp.array([False] * 6).at[free_degree].set(True)
+        is_velocity = jnp.array([False] * 6)[None].at[:, free_degree].set(True)
         names = (name,)
         return cls(
             names,

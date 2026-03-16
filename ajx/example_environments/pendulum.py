@@ -7,7 +7,7 @@ import ajx.example_graphics.geometry as geometry
 
 PendulumSparseParamClass = create_parameter_node(
     "PendulumSparseParam",
-    ("damping",),
+    ("damping", "offset_param"),
 )
 
 
@@ -52,6 +52,7 @@ class Pendulum(Environment):
         frame_rotation = math.quat_from_axis_angle(jnp.array([0.0, 0.0, 1.0]), 0.0)
 
         self.hinge_param = ConstraintParameters.create(
+            free_degree=5,
             frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), frame_rotation),
             frame_b=Frame(jnp.array([0.0, 0.091, 0.0]), frame_rotation),
             compliance=1e-5,
@@ -71,7 +72,7 @@ class Pendulum(Environment):
         if self.has_quadratic_damping:
             self.pre_step_modifiers.append(self.quadratic_damping)
 
-        self.rotary_decoder = RotaryEncoderHingeMounted("rotary_encoder", self.hinge)
+        self.rotary_decoder = LinearEncoder("rotary_encoder", self.hinge)
         self.sensors = (self.rotary_decoder,)
 
         self.sim = simulation.Simulation(
@@ -86,7 +87,14 @@ class Pendulum(Environment):
             jnp.array([0.0, -9.82, 0.0]),
             self.rb_param,
             self.constraint_param,
-            PendulumSparseParamClass(damping=self.damping_param),
+            PendulumSparseParamClass(
+                damping=self.damping_param,
+                offset_param=OffsetParameters(
+                    ("rotary_encoder"),
+                    (0.0,),
+                    (1.0,),
+                ),
+            ),
         )
 
         self.geometry_list = (self.pendulum_box,)

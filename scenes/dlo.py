@@ -14,33 +14,33 @@ if __name__ == "__main__":
     timestep = 0.016667
 
     environment = DLO(
-        sim_settings=SimulationSettings(timestep, True, Solver.DENSE_LINEAR),
+        sim_settings=SimulationSettings(timestep, True, Solver.SPARSE_LINEAR),
         env_settings=DLOSettings(
-            n_bodies=50,
-            body_length=0.1,
+            n_bodies=100,
+            body_length=0.04,
             constraint_type=ConstraintType.PRISMATIC.value,
             loose_end=True,
         ),
     )
-    xy_compliance = 1e-6
-    z_compliance = 1e-6
+    yz_compliance = 1e-6
+    x_compliance = 1e-2
     bend_compliance = 1e-6
-    torsion_compliance = 5e-5
+    torsion_compliance = 5e-1
 
     env_param = environment.default_param.tree_replace(
         src={
             "sparse_param.coupled_constraint_param": {
                 "compliance": jnp.array(
                     [
-                        xy_compliance,
-                        xy_compliance,
-                        z_compliance,
+                        x_compliance,
+                        yz_compliance,
+                        yz_compliance,
                         bend_compliance,
                         bend_compliance,
                         torsion_compliance,
                     ]
                 ),
-                "is_velocity": jnp.array([0, 0, 0, 0, 0, 1]),
+                "is_velocity": jnp.array([0, 0, 0, 0, 0, 0]),
             }
         }
     )
