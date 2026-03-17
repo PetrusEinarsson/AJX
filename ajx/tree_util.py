@@ -456,8 +456,7 @@ class ParameterNode:
         attrs = {}
         for f in fields(self):
             attrs[f.name] = None
-            if f.name == "names":
-                # TODO: Replace with static fields...
+            if f.metadata.get("pytree_node") is False:
                 attrs[f.name] = self.__dict__[f.name]
 
         for key, value in mapped_axes.items():

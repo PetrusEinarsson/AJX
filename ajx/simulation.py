@@ -384,9 +384,7 @@ class Simulation:
         M_scalar_inv = 1 / param.scalar_body_param.inertia[:, None, None]
         M_data = jnp.concatenate([M_stack, M_scalar], axis=None)
         M_data_inv = jnp.concatenate([M_inv_stack, M_scalar_inv], axis=None)
-        block_sizes = np.array(
-            [(6, state.conf.rot.shape[0]), (1, state.conf.scalar.shape[0])]
-        )
+        block_sizes = ((6, state.conf.rot.shape[0]), (1, state.conf.scalar.shape[0]))
 
         return (SVBDMatrix(M_data, block_sizes), SVBDMatrix(M_data_inv, block_sizes))
 
