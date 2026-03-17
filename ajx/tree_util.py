@@ -20,7 +20,16 @@ def arr_tree_replace(arr, src, name_idx_maps=()):
         if isinstance(key, int):
             idx = key
         elif isinstance(key, str):
-            idx = name_idx_maps[0].index(key)
+            has_names = len(name_idx_maps) > 0
+            has_idx_in_names = False
+            if has_names:
+                has_idx_in_names = key in name_idx_maps[0]
+            if has_idx_in_names:
+                idx = name_idx_maps[0].index(key)
+            elif key.isdigit():
+                idx = int(key)
+            else:
+                raise Exception
         else:
             raise Exception
         if isinstance(value, (jax.Array, int, float)):
@@ -43,6 +52,18 @@ def arr_tree_retract(arr, src):
         else:
             raise Exception
     return arr
+
+
+def tangent_jacfwd(func, argnum=0, has_aux=False):
+    def transformed_func(*x):
+        zero_tangent = jnp.zeros([x[argnum].tangent_size()])
+
+        def func_inc(inc, x):
+            return func(*x[:argnum], x[argnum].retract(inc), *x[argnum + 1 :])
+
+        return jax.jacfwd(func_inc, has_aux=has_aux)(zero_tangent, x)
+
+    return transformed_func
 
 
 class ParameterNode:
