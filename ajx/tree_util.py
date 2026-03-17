@@ -7,6 +7,8 @@ from dataclasses import asdict, fields
 from typing import Dict, Tuple, Union, Sequence
 import numbers
 
+global_flag = False
+
 
 def arr_tree_replace(arr, src, name_idx_maps=()):
     for key, value in src.items():
@@ -159,6 +161,14 @@ class ParameterNode:
             if key in parameter_node_attibutes:
                 if isinstance(val, dict):
                     new.__dict__[key] = self.__dict__[key].tree_replace(val)
+                elif isinstance(val, ParameterNode):
+                    from loguru import logger
+
+                    global global_flag
+                    if not global_flag:
+                        logger.warning("Using a fix that may cause problems(?)")
+                        global_flag = True
+                    new.__dict__[key] = val
                 elif val is None:
                     continue
                 else:
