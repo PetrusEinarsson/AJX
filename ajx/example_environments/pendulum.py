@@ -123,3 +123,16 @@ class Pendulum(Environment):
         initial_gvel = GeneralizedVelocity(jnp.zeros([1, 6]))
 
         return State(initial_conf, initial_gvel)
+
+    def unflatten(self, flat_state):
+        sizes = jnp.array([1 * 3, 1 * 4, 1 * 6])
+
+        offsets = jnp.cumulative_sum(sizes, include_initial=True)
+
+        conf_pos = flat_state[offsets[0] : offsets[1]].reshape(1, 3)
+        conf_rot = flat_state[offsets[1] : offsets[2]].reshape(1, 4)
+        gvel = flat_state[offsets[2] : offsets[3]].reshape(1, 6)
+        return State(
+            Configuration(conf_pos, conf_rot),
+            GeneralizedVelocity(gvel),
+        )
