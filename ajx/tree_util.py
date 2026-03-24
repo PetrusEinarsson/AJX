@@ -160,7 +160,7 @@ class ParameterNode:
                 )
             if key in parameter_node_attibutes:
                 if isinstance(val, dict):
-                    new.__dict__[key] = self.__dict__[key].tree_replace(val)
+                    new.__dict__[key] = new.__dict__[key].tree_replace(val)
                 elif isinstance(val, ParameterNode):
                     from loguru import logger
 
@@ -231,6 +231,8 @@ class ParameterNode:
                 residual = (self_value - other_value).flatten()
             elif isinstance(self_value, ParameterNode):
                 residual = self_value.log_map(other_value)
+            elif f.metadata.get("pytree_node") is False:
+                continue
             else:
                 raise Exception
             residuals.append(residual)
@@ -316,6 +318,8 @@ class ParameterNode:
             elif isinstance(value, ParameterNode):
                 kwargs[f.name] = value.copy()
             elif isinstance(value, (tuple, str)):
+                kwargs[f.name] = value
+            elif f.metadata.get("pytree_node") is False:
                 kwargs[f.name] = value
             else:
                 raise Exception
@@ -432,6 +436,8 @@ class ParameterNode:
                 kwargs[f.name] = value[key]
             elif isinstance(value, ParameterNode):
                 kwargs[f.name] = value[key]
+            elif f.metadata.get("pytree_node") is False:
+                kwargs[f.name] = value
             else:
                 raise Exception
 
