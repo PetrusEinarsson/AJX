@@ -292,22 +292,6 @@ class OneBodyConstraint(Constraint):
     def place_other(
         self, param: SimulationParameters, body_transform: Transform, x: float
     ) -> Transform:
-        """
-        Returns the configuration of the next body within a kinematic tree containing this joint.
-
-        Parameters
-        ----------
-        param: Dict
-            The system's parameters stored as a jax pytree with a dictionary at the top level.
-        body_transform: Transform
-            The configuration of the previous body/frame in the kinematic chain.
-        x: float
-            Value of the free degree displacement between the frames (Assumes prismatic or hinge).
-        Returns:
-        -------
-        Transform:
-            The configuration of the next body.
-        """
         i = param.constraint_param.names.index(self.name)
         cp = param.constraint_param
         d0_a = cp.frame_a.position[i]
@@ -329,14 +313,17 @@ class OneBodyConstraint(Constraint):
         hinge_body_b_position = frame_a_position - d_b
 
         # Prismatic
-        d_b = u_a * x
-        frame_b_pos = frame_a_position - d_b
+        offset = jnp.array([x, 0, 0])
+        d_b0 = math.rotate_vector(math.conjugate(frame_a_rot), offset)
+
+        frame_b_pos = frame_a_position - d_b0
         frame_b_rot = frame_a_rot
         frame_b_rot0 = cp.frame_b.rotation[i]
         d0_b = cp.frame_b.position[i]
+        d_b = math.rotate_vector(frame_b_rot, d0_b)
         frame_b_rot0_inv = math.conjugate(frame_b_rot0)
         prismatic_body_b_rotation = math.quat_mul(frame_b_rot, frame_b_rot0_inv)
-        prismatic_body_b_position = frame_b_pos + d_a
+        prismatic_body_b_position = frame_b_pos - d_b
 
         body_b_rotation = hinge_body_b_rotation * (
             self.constraint_type == ConstraintType.HINGE.value

@@ -345,14 +345,18 @@ class TwoBodyConstraint(Constraint):
         hinge_body_b_position = frame_a_position - d_b
 
         # Prismatic
-        d_b = u_a * x
-        frame_b_pos = frame_a_position - d_b
+        offset = jnp.array([x, 0, 0])
+        d_b0 = math.rotate_vector(math.conjugate(frame_a_rot), offset)
+
+        frame_b_pos = frame_a_position - d_b0
         frame_b_rot = frame_a_rot
         frame_b_rot0 = cp.frame_b.rotation[i]
         d0_b = cp.frame_b.position[i]
+        d_b = math.rotate_vector(frame_b_rot, d0_b)
         frame_b_rot0_inv = math.conjugate(frame_b_rot0)
         prismatic_body_b_rotation = math.quat_mul(frame_b_rot, frame_b_rot0_inv)
-        prismatic_body_b_position = frame_b_pos + d_a
+        prismatic_body_b_position = frame_b_pos - d_b
+
         body_b_rotation = hinge_body_b_rotation * (
             free_degree == 5
         ) + prismatic_body_b_rotation * (free_degree == 0)
