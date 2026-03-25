@@ -11,13 +11,8 @@ from ajx.definitions import (
     GeneralizedVelocity,
 )
 from ajx.pre_step_modifiers import PreStepModifier
-from ajx.constraints import (
-    TwoBodyConstraint,
-    OneBodyConstraint,
-    Constraint,
-    TwoBodyShaftConstraint,
-    GearConstraint,
-)
+from ajx.constraints import Constraint
+
 from ajx.sensors import Sensor
 from typing import Dict, List, Tuple, Optional
 from loguru import logger
@@ -27,7 +22,7 @@ from ajx.block_sparse.vbc_matrix import VBCMatrix
 from ajx.block_sparse.vbr_matrix import VBRMatrix
 from ajx.block_sparse.svbd_matrix import SVBDMatrix
 from ajx.param import SimulationParameters
-from ajx.definitions import RigidBodyParameters, ScalarBodyParameters
+from ajx.definitions import RigidBodyParameters
 
 from flax import struct
 from functools import partial
@@ -51,9 +46,9 @@ class SimulationSettings:
     timestep: float
     use_gyroscopic: bool = False
     solver: Solver = Solver.DENSE_LINEAR
+    do_jit: bool = True
 
 
-@struct.dataclass
 class Simulation:
     """
     A class to represent the physics simulation.
@@ -82,14 +77,31 @@ class Simulation:
         Solve for the forces to step from one state to a target state.
     """
 
-    settings: SimulationSettings
-    rigid_body_list: Tuple[RigidBody]
-    constraint_list: Tuple[Constraint]
-    sensor_list: Tuple[Sensor] = struct.field(default_factory=lambda: ())
-    pre_step_modifiers: Tuple[PreStepModifier] = struct.field(
-        default_factory=lambda: ()
-    )
-    scalar_body_list: Tuple[ScalarBody] = struct.field(default_factory=lambda: ())
+    def __init__(
+        self,
+        settings: SimulationSettings,
+        rigid_body_list: Tuple[RigidBody],
+        constraint_list: Tuple[Constraint] = (),
+        sensor_list: Tuple[Sensor] = (),
+        pre_step_modifiers: Tuple[PreStepModifier] = (),
+        scalar_body_list: Tuple[ScalarBody] = (),
+    ):
+        self.settings = settings
+        self.rigid_body_list = rigid_body_list
+        self.constraint_list = constraint_list
+        self.sensor_list = sensor_list
+        self.pre_step_modifiers = pre_step_modifiers
+        self.scalar_body_list = scalar_body_list
+        if settings.do_jit:
+            self.pre_step = jit(self.pre_step)
+            self.post_step = jit(self.post_step)
+            self.inverse_dynamics = jit(self.inverse_dynamics)
+            self._force_solver = jit(self._force_solver)
+            self._gravity_gyro_force3D = jit(self._gravity_gyro_force3D)
+            self._assemble_mass_matrix = jit(self._assemble_mass_matrix)
+            self._assemble_blocks = jit(self._assemble_blocks)
+        else:
+            logger.warning("Simulating without jit compilation")
 
     @property
     def h_inv(self):
@@ -99,7 +111,6 @@ class Simulation:
     def h(self):
         return self.settings.timestep
 
-    @partial(jit, static_argnums=0)
     def pre_step(
         self, state: State, u: jax.Array, param: SimulationParameters
     ) -> Tuple[Dict[str, jax.Array], jax.Array, int]:
@@ -118,12 +129,10 @@ class Simulation:
 
         Returns:
         -------
-        Dict[str, jax.Array]:
-            The velocity update.
+        State:
+            The updates state from pre_step_modifiers
         jax.Array:
             The multipliers.
-        int:
-            Solver state.
         """
         for component in self.pre_step_modifiers:
             state, param = component.update_params(state, u, param)
@@ -131,7 +140,6 @@ class Simulation:
 
         return state, self._force_solver(state, f_ext, param)
 
-    @partial(jit, static_argnums=0)
     def post_step(self, state: State, gvel_next: GeneralizedVelocity) -> State:
         """
         Update the state using the given velocity update.
@@ -204,7 +212,6 @@ class Simulation:
 
         return jnp.concatenate(observation_list)
 
-    @partial(jit, static_argnums=0)
     def inverse_dynamics(
         self,
         state: State,
@@ -286,7 +293,6 @@ class Simulation:
         M_Sigma = M + G_dense.T @ jnp.diag(1 / Sigma_data) @ G_dense
         return M_Sigma
 
-    @partial(jit, static_argnums=0)
     def _gravity_gyro_force3D(self, state, param):
         """Compute the external force to apply to each rigid body"""
         g = param.gravity
@@ -319,7 +325,6 @@ class Simulation:
 
         return combined_gforces
 
-    @partial(jit, static_argnums=0)
     def _force_solver(
         self, state: State, f_ext: jax.Array, param: SimulationParameters
     ) -> Tuple[Tuple[State, jax.Array], int]:
@@ -358,7 +363,6 @@ class Simulation:
         )
         return (gvel_next, lbda), code
 
-    @partial(jit, static_argnums=0)
     def _assemble_mass_matrix(
         self, state: State, param: SimulationParameters
     ) -> SVBDMatrix:
@@ -388,7 +392,6 @@ class Simulation:
 
         return (SVBDMatrix(M_data, block_sizes), SVBDMatrix(M_data_inv, block_sizes))
 
-    @partial(jit, static_argnums=0)
     def _assemble_blocks(
         self,
         state: State,
