@@ -205,5 +205,7 @@ def to_rotation_vector_jvp(primal, tangent):
     eps = (jnp.dot(q_v, n) == 0.0) * 1.0e-8
     gamma_dot = -2 * qs_dot / (jnp.dot(q_v, n) + eps)
     n_dot = (qv_dot - 0.5 * n * q_s * gamma_dot) / (jnp.dot(q_v, n) + eps)
-    theta_dot = gamma_dot * n + gamma * n_dot
+    theta_dot_large = gamma_dot * n + gamma * n_dot
+    theta_dot_small = 2 * qv_dot
+    theta_dot = theta_dot_small * (gamma < 1e-8) + theta_dot_large * (gamma >= 1e-8)
     return primal_out, theta_dot
