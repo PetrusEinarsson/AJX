@@ -44,6 +44,11 @@ class Transform(ParameterNode):
         new_rot = math.normalize(new_rot)
         return Transform(new_pos, new_rot)
 
+    def log_map(self, other: Transform):
+        rot_delta = math.quat_residual(self.rot, other.rot)
+        pos_delta = self.pos - other.pos
+        return jnp.concatenate([pos_delta, rot_delta], axis=None)
+
 
 @struct.dataclass
 class Configuration(ParameterNode):
