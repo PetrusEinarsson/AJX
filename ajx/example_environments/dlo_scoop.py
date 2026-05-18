@@ -31,11 +31,12 @@ class DLOSettings:
         inner_radius: float,
         density: float,
         pose_estimate_linear_offsets: List[float],
-        gripper1_offset: Transform,
-        gripper2_offset: Transform,
         loose_end: bool = False,
     ):
         segment_length = length / n_segments
+
+        gripper1_offset = Transform.identity()
+        gripper2_offset = Transform.identity()
 
         pose_estimate_bodies = []
         pose_estimate_constraints_a = []
@@ -85,7 +86,7 @@ class DLOState(ParameterNode):
     conf: Configuration
     gvel: GeneralizedVelocity
     lock_targets: jax.Array
-    multipliers: jax.Array
+    multipliers: jax.Array = struct.field(default_factory=lambda: jnp.zeros([0]))
 
     tangent_restrictions: Tuple[str, ...] = struct.field(
         pytree_node=False, default=tuple(["conf", "gvel", "lock_targets"])
@@ -109,9 +110,7 @@ class CableParameters(ParameterNode):
         stretch_stiffness = E * area / segment_length
         bend_stiffness = E * area_moment / segment_length
         twist_stiffness = G * polar_moment / segment_length
-        timoshenko_shear_coefficient = 0.857
-        shear_stiffness = G * area / segment_length * timoshenko_shear_coefficient
-        return stretch_stiffness, bend_stiffness, twist_stiffness, shear_stiffness
+        return stretch_stiffness, bend_stiffness, twist_stiffness
 
 
 DLOSparseParam = create_parameter_node("DLOSparseParam", ("cable_param",))
@@ -222,7 +221,7 @@ class LockAtZeroSpeedMotor(PreStepModifier):
         )
 
 
-class DLO(Environment):
+class DLOScoop(Environment):
     """
     Deformable Linear Object (DLO) environment controlled by two grippers.
 
@@ -242,6 +241,9 @@ class DLO(Environment):
         self,
         sim_settings: SimulationSettings,
         env_settings: DLOSettings,
+        target_pos: jax.Array,
+        target_vel: jax.Array,
+        bin_pos: jax.Array,
     ):
         self.n_control = 1
         self.timestep = sim_settings.timestep
@@ -252,13 +254,17 @@ class DLO(Environment):
         self.control_names = ["voltage"]
         self.state_tangent_dim = self.env_settings.n_segments * 12
         self.settings = sim_settings
+        self.target_pos = target_pos
+        self.target_vel = target_vel
+        self.bin_pos = bin_pos
+
         self._build_sim(sim_settings)
         self.dynamic_residual_names = self.get_state_residual_names()
 
         self.camera_pos = jnp.array([0.0, 2.0, 0.0])
         self.camera_rot = jnp.array([1.0, 0.0, 0.0, 0.0])
 
-        self.initial_control_state = (False, False)
+        self.initial_control_state = None
 
         super().post_init()
 
@@ -276,6 +282,10 @@ class DLO(Environment):
         )
         axes_path = os.path.join(script_dir, "assets/axes.glb")
         marker_debug_path = os.path.join(script_dir, "assets/cube_wireframe.glb")
+        shovel_path = os.path.join(script_dir, "assets/shovel.glb")
+        cylinder_path = os.path.join(script_dir, "assets/cylinder.glb")
+        arrow_path = os.path.join(script_dir, "assets/arrow.bam")
+        bin_path = os.path.join(script_dir, "assets/ring.bam")
 
         grip_tool_model = geometry.Model(
             f"grip_tool_model",
@@ -320,7 +330,34 @@ class DLO(Environment):
             ),
             color=(0.0, 0.0, 0.0),
         )
+        shovel = geometry.Model(
+            f"shovel",
+            shovel_path,
+            rotation=math.Rotations.z_to_y,
+            color=(0.0, 0.0, 0.0),
+        )
+        cylinder = geometry.Model(
+            f"cylinder",
+            cylinder_path,
+            rotation=math.Rotations.z_to_y,
+            color=(1.0, 0.0, 0.0),
+        )
+        x_scale = jnp.linalg.norm(self.target_vel[:3]) * 0.1
+        arrow = geometry.Model(
+            f"arrow",
+            arrow_path,
+            rotation=math.Rotations.identity,
+            scale=(x_scale, 0.1, 0.1),
+            color=(1.0, 0.0, 0.0),
+        )
         bl = self.env_settings.segment_halflength
+        bin = geometry.Model(
+            f"bin",
+            bin_path,
+            rotation=math.Rotations.z_to_y,
+            scale=(0.1, 0.1, 0.1),
+            color=(1.0, 0.0, 0.0),
+        )
         ground = geometry.Square(
             "ground",
             400.0,
@@ -338,6 +375,10 @@ class DLO(Environment):
                 segment_model,
                 segment_wireframe_model,
                 frame_model,
+                shovel,
+                arrow,
+                cylinder,
+                bin,
                 ground,
             ]
         )
@@ -352,24 +393,26 @@ class DLO(Environment):
         grapple_box_length = self.grapple_box_length
 
         reference_box = geometry.Box(
-            f"grip_tool1_box",
-            grapple_box_length,
-            0.3,
-            0.15,
+            f"reference_box",
+            0.03,
+            0.03,
+            0.06,
+        )
+        reference_box2 = geometry.Box(
+            f"reference_box2",
+            0.14 * 0.5,
+            0.25 * 0.5,
+            0.01 * 0.5,
         )
         tool1_model_local_transform = Transform(
             jnp.array([0.0, 0.0, 0.0]), math.Rotations.x_to_y
         )
-        tool2_model_local_transform = Transform(
-            jnp.array([0.0, 0.0, 0.0]), math.Rotations.y_to_x
-        )
         marker1_local_transform = self.env_settings.pose_estimate_offsets[0]
-        marker2_local_transform = self.env_settings.pose_estimate_offsets[-1]
         tool1_to_dlo_frame = Transform(
             jnp.array([grapple_box_length, 0.0, 0.0]), math.Rotations.identity
         )
         tool2_to_dlo_frame = Transform(
-            jnp.array([-grapple_box_length, 0.0, 0.0]), math.Rotations.identity
+            jnp.array([-0.060425, 0.0, 0.0]), math.Rotations.identity
         )
 
         density = self.env_settings.density
@@ -377,14 +420,14 @@ class DLO(Environment):
         # Hidden links to grip tool 1
         hidden_link1a = RigidBody(f"hidden_link1a", [], [])
         hidden_link1a_param = RigidBodyParameters.create(
-            mass=1.0,
-            inertia_diag=jnp.array([1.0, 1.0, 1.0]),
+            mass=0.001,
+            inertia_diag=jnp.array([1.0, 1.0, 1.0]) * 0.001,
             name="hidden_link1a",
         )
         hidden_link2a = RigidBody(f"hidden_link2a", [], [])
         hidden_link2a_param = RigidBodyParameters.create(
-            mass=1.0,
-            inertia_diag=jnp.array([1.0, 1.0, 1.0]),
+            mass=0.001,
+            inertia_diag=jnp.array([1.0, 1.0, 1.0]) * 0.001,
             name="hidden_link2a",
         )
         grip_tool1 = RigidBody(
@@ -397,37 +440,38 @@ class DLO(Environment):
             ],
         )
         grip_tool1_param = RigidBodyParameters.create(
-            mass=density * 0.2 * 0.2 * grapple_box_length,
+            mass=density * 0.03 * 0.03 * 0.06,
             inertia_diag=reference_box.get_diag_inertia(density),
             name="grip_tool1",
         )
 
-        # Hidden links to grip tool 2
-        hidden_link1b = RigidBody(f"hidden_link1b", [], [])
-        hidden_link1b_param = RigidBodyParameters.create(
-            mass=1.0,
-            inertia_diag=jnp.array([1.0, 1.0, 1.0]),
-            name="hidden_link1b",
-        )
-        hidden_link2b = RigidBody(f"hidden_link2b", [], [])
-        hidden_link2b_param = RigidBodyParameters.create(
-            mass=1.0,
-            inertia_diag=jnp.array([1.0, 1.0, 1.0]),
-            name="hidden_link2b",
-        )
         grip_tool2 = RigidBody(
             f"grip_tool2",
-            [("grip_tool_model", tool2_model_local_transform)],
-            [
-                ("grip_tool_debug_model", tool2_model_local_transform),
-                ("marker_model", marker2_local_transform),
-                ("axes_model", tool2_to_dlo_frame),
-            ],
+            [("shovel", Transform.identity())],
+            [("shovel", Transform.identity())],
         )
         grip_tool2_param = RigidBodyParameters.create(
-            mass=density * 0.2 * 0.2 * grapple_box_length,
-            inertia_diag=reference_box.get_diag_inertia(density),
+            mass=0.14 * 0.25 * 0.01 * density * 0.5**3,
+            inertia_diag=reference_box2.get_diag_inertia(density),
             name="grip_tool2",
+        )
+
+        cylinder = RigidBody(
+            f"cylinder",
+            [
+                ("cylinder", Transform.identity()),
+            ],
+            [("cylinder", Transform.identity())],
+        )
+        r = 0.03
+        h = 0.04
+        cyl_mass = 3 * density * jnp.pi * r**2 * h
+        Jxy = 1 / 12 * cyl_mass * (3 * r**2 + h**2)
+        Jz = 0.5 * cyl_mass * r**2
+        cylinder_param = RigidBodyParameters.create(
+            mass=cyl_mass,
+            inertia_diag=jnp.array([Jxy, Jxy, Jz]),
+            name="cylinder",
         )
 
         for i in range(self.env_settings.n_segments):
@@ -487,11 +531,11 @@ class DLO(Environment):
         )
         lock_world_to_hidden1_param = ConstraintParameters.create_locked_ext(
             frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.x_to_z),
-            frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.x_to_z),
+            frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.identity),
             compliance_lin=1e-8,
             compliance_rot=1e-8,
-            viscous_compliance_lin=1e-2,
-            viscous_compliance_rot=1e-1,
+            viscous_compliance_lin=1e-3,
+            viscous_compliance_rot=1e-2,
             damping=2 * self.reference_timestep,
             offset=0.0,
             name="lock_world_to_hidden1a",
@@ -502,13 +546,11 @@ class DLO(Environment):
             body_b=f"hidden_link2a",
             constraint_residual=ConstraintResidual.AXIAL_WORLD_SPHERICAL.value,
         )
-        lock_hidden1a_to_hidden2a_param = ConstraintParameters.create_locked_ext(
+        lock_hidden1a_to_hidden2a_param = ConstraintParameters.create_locked(
             frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.x_to_y),
             frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.x_to_y),
-            compliance_lin=1e-8,
-            compliance_rot=1e-8,
-            viscous_compliance_lin=1e-2,
-            viscous_compliance_rot=1e-1,
+            compliance=1e-8,
+            viscous_compliance=1e-5,
             damping=2 * self.reference_timestep,
             offset=0.0,
             name=f"lock_hidden1a_to_hidden2a",
@@ -519,13 +561,11 @@ class DLO(Environment):
             body_b=f"grip_tool1",
             constraint_residual=ConstraintResidual.AXIAL_WORLD_SPHERICAL.value,
         )
-        lock_hidden2a_to_gripper1_param = ConstraintParameters.create_locked_ext(
+        lock_hidden2a_to_gripper1_param = ConstraintParameters.create_locked(
             frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.identity),
             frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.identity),
-            compliance_lin=1e-8,
-            compliance_rot=1e-8,
-            viscous_compliance_lin=1e-2,
-            viscous_compliance_rot=1e-1,
+            compliance=1e-8,
+            viscous_compliance=1e-5,
             damping=2 * self.reference_timestep,
             offset=0.0,
             name=f"lock_hidden2a_to_gripper1",
@@ -587,7 +627,7 @@ class DLO(Environment):
         )
         lock_joint_param.append(
             ConstraintParameters.create_locked(
-                frame_a=Frame(jnp.array([bl, 0.0, 0.0]), math.Rotations.identity),
+                frame_a=Frame(jnp.array([bl, 0.0, 0.0]), math.Rotations.z_to_x),
                 frame_b=Frame(tool2_to_dlo_frame.pos, tool2_to_dlo_frame.rot),
                 compliance=1e-8,
                 viscous_compliance=1e-5,
@@ -596,70 +636,21 @@ class DLO(Environment):
                 name="lock_dlo_to_gripper2",
             )
         )
-
-        # Locks [gripper2 -> hidden_link2b -> hidden_link1b -> world]
-        self.lock_gripper2_to_hidden_link2b = TwoBodyConstraint(
-            name=f"lock_gripper2_to_hidden2b",
-            body_a=f"grip_tool2",
-            body_b=f"hidden_link2b",
-            constraint_residual=ConstraintResidual.AXIAL_WORLD_SPHERICAL.value,
+        self.lock_gripper2_to_cylinder = TwoBodyConstraint(
+            name="lock_gripper2_to_cylinder",
+            body_a="grip_tool2",
+            body_b="cylinder",
+            constraint_residual=ConstraintResidual.AXIAL_LOCAL_SPHERICAL.value,
         )
-        lock_gripper2_to_hidden_link2b_param = ConstraintParameters.create_locked_ext(
-            frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.identity),
-            frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.identity),
-            compliance_lin=1e-8,
-            compliance_rot=1e-8,
-            viscous_compliance_lin=1e-2,
-            viscous_compliance_rot=1e-1,
+        lock_gripper2_to_cylinder_param = ConstraintParameters.create_locked(
+            frame_a=Frame(jnp.array([0.03, 0.0, -0.004686]), math.Rotations.identity),
+            frame_b=Frame(jnp.array([0.0, 0.0, -0.04]), math.Rotations.identity),
+            compliance=1e-8,
+            viscous_compliance=1e-5,
             damping=2 * self.reference_timestep,
             offset=0.0,
-            name=f"lock_gripper2_to_hidden2b",
+            name="lock_gripper2_to_cylinder",
         )
-        self.lock_hidden2b_to_hidden1b = TwoBodyConstraint(
-            name=f"lock_hidden2b_to_hidden1b",
-            body_a=f"hidden_link2b",
-            body_b=f"hidden_link1b",
-            constraint_residual=ConstraintResidual.AXIAL_WORLD_SPHERICAL.value,
-        )
-        lock_hidden2b_to_hidden1b_param = ConstraintParameters.create_locked_ext(
-            frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.x_to_y),
-            frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.x_to_y),
-            compliance_lin=1e-8,
-            compliance_rot=1e-8,
-            viscous_compliance_lin=1e-2,
-            viscous_compliance_rot=1e-1,
-            damping=2 * self.reference_timestep,
-            offset=0.0,
-            name=f"lock_hidden2b_to_hidden1b",
-        )
-
-        self.lock_hidden1b_to_world = OneBodyConstraint(
-            name=f"lock_hidden1b_to_world",
-            body=f"hidden_link1b",
-            constraint_residual=ConstraintResidual.AXIAL_WORLD_SPHERICAL.value,
-        )
-        # Locked to the world with a special offset (total length)
-        lock_hidden1b_to_world_param = ConstraintParameters.create_locked_ext(
-            frame_a=Frame(
-                jnp.array(
-                    [
-                        0.0,  # bl * 2 * self.env_settings.n_segments + 2 * grapple_box_length,
-                        0.0,
-                        0.0,
-                    ]
-                ),
-                math.Rotations.x_to_z,
-            ),
-            frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.x_to_z),
-            compliance_lin=1e-8,
-            compliance_rot=1e-8,
-            viscous_compliance_lin=1e-2,
-            viscous_compliance_rot=1e-1,
-            damping=2 * self.reference_timestep,
-            offset=0.0,
-            name="lock_hidden1b_to_world",
-        )
-
         rb_param = RigidBodyParameters.concatenate(
             [
                 hidden_link1a_param,
@@ -667,8 +658,7 @@ class DLO(Environment):
                 grip_tool1_param,
                 *arms_param,
                 grip_tool2_param,
-                hidden_link2b_param,
-                hidden_link1b_param,
+                cylinder_param,
             ]
         )
         rigid_bodies = tuple(
@@ -678,8 +668,7 @@ class DLO(Environment):
                 grip_tool1,
                 *arms,
                 grip_tool2,
-                hidden_link2b,
-                hidden_link1b,
+                cylinder,
             ]
         )
 
@@ -689,9 +678,7 @@ class DLO(Environment):
                 lock_hidden1a_to_hidden2a_param,
                 lock_hidden2a_to_gripper1_param,
                 *lock_joint_param,
-                lock_gripper2_to_hidden_link2b_param,
-                lock_hidden2b_to_hidden1b_param,
-                lock_hidden1b_to_world_param,
+                lock_gripper2_to_cylinder_param,
             ]
         )
         constraints = tuple(
@@ -700,9 +687,7 @@ class DLO(Environment):
                 self.lock_hidden1a_to_hidden2a,
                 self.lock_hidden2a_to_gripper1,
                 *self.lock_joints,
-                self.lock_gripper2_to_hidden_link2b,
-                self.lock_hidden2b_to_hidden1b,
-                self.lock_hidden1b_to_world,
+                self.lock_gripper2_to_cylinder,
             ]
         )
         if self.env_settings.loose_end:
@@ -712,6 +697,7 @@ class DLO(Environment):
                     self.lock_hidden1a_to_hidden2a,
                     self.lock_hidden2a_to_gripper1,
                     *self.lock_joints,
+                    self.lock_gripper2_to_cylinder,
                 ]
             )
 
@@ -725,16 +711,6 @@ class DLO(Environment):
         )
         target_speed_motor3 = LockAtZeroSpeedMotor(
             "motor1_roll", self.lock_hidden2a_to_gripper1, hinge_degree, 5, 5
-        )
-
-        target_speed_motor4 = LockAtZeroSpeedMotor(
-            "motor2_pos_yaw", self.lock_hidden1b_to_world, pos_yaw_degrees, 6, 6
-        )
-        target_speed_motor5 = LockAtZeroSpeedMotor(
-            "motor2_pitch", self.lock_hidden2b_to_hidden1b, hinge_degree, 10, 10
-        )
-        target_speed_motor6 = LockAtZeroSpeedMotor(
-            "motor2_roll", self.lock_gripper2_to_hidden_link2b, hinge_degree, 11, 11
         )
 
         self.cable = CoupleAsCable(
@@ -751,9 +727,6 @@ class DLO(Environment):
             target_speed_motor1,
             target_speed_motor2,
             target_speed_motor3,
-            target_speed_motor4,
-            target_speed_motor5,
-            target_speed_motor6,
             self.cable,
         )
 
@@ -791,8 +764,17 @@ class DLO(Environment):
 
         self.geometry_list = self._create_geometry()
 
+        vel_rotation_vec = self.target_vel[:3] / jnp.linalg.norm(self.target_vel[:3])
+        # Rotation interpretation: x-axis lands on vel_rotation_vec
+        rot_mat = math.make_rotation_matrix(vel_rotation_vec)
+
+        vel_quat = math.matrix_to_quaternion(rot_mat)
+
         self.extra_geometry = [
             ("ground", Transform.identity()),
+            ("marker_model", Transform.identity().replace(pos=self.target_pos)),
+            ("arrow", Transform.identity().replace(pos=self.target_pos, rot=vel_quat)),
+            ("bin", Transform.identity().replace(pos=self.bin_pos)),
         ]
 
     def create_neutral_configuration(self, observation, param):
@@ -801,12 +783,12 @@ class DLO(Environment):
         world_transform = Transform(
             jnp.array(
                 [
-                    -bl * self.env_settings.n_segments - self.grapple_box_length,
+                    0.0,
                     0.0,
                     0.0,
                 ]
             ),
-            jnp.array([1.0, 0.0, 0.0, 0.0]),
+            math.Rotations.identity,  # This should not be required...
         )
 
         body_transforms = []
@@ -814,7 +796,7 @@ class DLO(Environment):
             self.lock_world_to_hidden1a.place_other(param, world_transform, 0)
         )
         body_transforms.append(
-            self.lock_hidden1a_to_hidden2a.place_other(0, param, world_transform, 0)
+            self.lock_hidden1a_to_hidden2a.place_other(0, param, body_transforms[-1], 0)
         )
         body_transforms.append(
             self.lock_hidden2a_to_gripper1.place_other(0, param, body_transforms[-1], 0)
@@ -827,16 +809,11 @@ class DLO(Environment):
         gripper2_transform = self.lock_joints[-1].place_other(
             0, param, body_transforms[-1], 0
         )
-        hidden2b_transform = self.lock_gripper2_to_hidden_link2b.place_other(
+        cylinder_transform = self.lock_gripper2_to_cylinder.place_other(
             0, param, gripper2_transform, 0
         )
-        hidden1b_transform = self.lock_hidden2b_to_hidden1b.place_other(
-            0, param, hidden2b_transform, 0
-        )
-
         body_transforms.append(gripper2_transform)
-        body_transforms.append(hidden2b_transform)
-        body_transforms.append(hidden1b_transform)
+        body_transforms.append(cylinder_transform)
 
         return Configuration.concatenate(
             [body_transform.to_configuration() for body_transform in body_transforms]
@@ -845,10 +822,9 @@ class DLO(Environment):
     def get_neutral_state(self, param):
         initial_conf = self.create_neutral_configuration(None, param)
         n_segments = self.env_settings.n_segments
-        n_bodies = n_segments + 6
+        n_bodies = n_segments + 5
         initial_gvel = GeneralizedVelocity(jnp.zeros([n_bodies, 6]))
 
-        # TODO
         targets = jnp.stack(
             [
                 param.constraint_param.frame_a[0].flatten(),
@@ -857,314 +833,14 @@ class DLO(Environment):
         )
         bl = self.env_settings.segment_halflength
 
-        gripper1_pos = -jnp.array(
-            [-bl * self.env_settings.n_segments - self.grapple_box_length, 0, 0]
-        )
-        gripper2_pos = -jnp.array(
-            [bl * self.env_settings.n_segments + self.grapple_box_length, 0, 0]
-        )
-        targets = jnp.zeros([12]).at[6:9].set(gripper2_pos)
+        gripper1_pos = -jnp.array([0, 0, 0])
+        targets = jnp.zeros([12])
         targets = targets.at[0:3].set(gripper1_pos)
+
         multipliers_size = self.get_multiplier_size()
         multipliers = jnp.zeros([multipliers_size])
 
-        return DLOState(initial_conf, initial_gvel, targets, multipliers=multipliers)
-
-    def convert_marker_transforms_to_body_transforms(
-        self, marker_transforms: Transform
-    ):
-        """
-        Convert marker transforms (world → marker) into body transforms (world → body)
-        using known marker offsets (body → marker).
-
-        Parameters
-        ----------
-        marker_transforms : Transform
-            Batched marker transforms in the world frame. The `pos` and `rot` fields
-            must have shapes (n, 3) and (n, 4), respectively, where `n` is the number
-            of markers.
-
-        Returns
-        -------
-        Transform
-            Batched body transforms in the world frame (world → body), with the same
-            batch size `n` as the input.
-        """
-        offset_transforms = Transform(
-            pos=jnp.stack([po.pos for po in self.env_settings.pose_estimate_offsets]),
-            rot=jnp.stack([po.rot for po in self.env_settings.pose_estimate_offsets]),
-        )
-        marker_to_body = vmap(Transform.inverse)(offset_transforms)
-        body_transforms = vmap(Transform.multiply)(marker_transforms, marker_to_body)
-        return body_transforms
-
-    def get_state_by_body_interpolation(
-        self, param: SimulationParameters, transforms: Transform
-    ):
-        # Find "relaxed-offset" at interpolation transforms
-        state0 = self.get_neutral_state(param)
-        n_interp_bodies = self.cable.n_segments + 2
-        inertp_offset = self.cable.body_offset - 1
-
-        interp_names = param.rigid_body_param.names[
-            inertp_offset : inertp_offset + n_interp_bodies
-        ]
-        indices_p = [
-            interp_names.index(name) for name in self.env_settings.pose_estimate_bodies
-        ]
-        off0 = np.array(
-            state0.conf.pos[inertp_offset : inertp_offset + n_interp_bodies, 0]
-        )
-        off0_p = off0[jnp.array(indices_p)]
-
-        # Begin with just xyz-interpolation
-        from scipy.interpolate import CubicSpline, interp1d
-
-        cs = CubicSpline(off0_p, transforms.pos)
-        new_pos = cs(off0)
-
-        # Rotation-interpolation
-        qp = transforms.rot
-        new_rot = math.quat_interp(off0, off0_p, qp)
-
-        new_state = self._place_hidden_links(new_pos, new_rot, param, state0)
-
-        return new_state
-
-    def get_state_by_interface_interpolation(
-        self, param: SimulationParameters, transforms: Transform
-    ):
-        # Find "relaxed-offset" at interpolation transforms
-        state0 = self.get_neutral_state(param)
-        # These are the offsets that we transform to and from...
-
-        # First frame is not included in offsets a (DLO + last lock)
-        # Note that the full interpolation ensamble includes both DLO and grippers
-        n_interp_bodies = self.cable.n_segments + 2
-        inertp_offset = self.cable.body_offset - 1
-        offset_b = self.cable.constraint_offset - 1
-        offset_a = self.cable.constraint_offset
-        interp_names = param.rigid_body_param.names[
-            inertp_offset : inertp_offset + n_interp_bodies
-        ]
-        indices_body = [
-            interp_names.index(name) for name in self.env_settings.pose_estimate_bodies
-        ]
-
-        # Exclude the last frame (not part of interpolation)
-        frame_offsets_a = param.constraint_param.frame_a.as_vectorized_transform()[
-            offset_a : offset_a + n_interp_bodies
-        ][:-1]
-
-        # Last frame is not included in offsets b (DLO + first lock)
-        frame_offsets_b = param.constraint_param.frame_b.as_vectorized_transform()[
-            offset_b : offset_b + n_interp_bodies
-        ][1:]
-
-        pos = state0.conf.pos[inertp_offset : inertp_offset + n_interp_bodies]
-        rot = state0.conf.rot[inertp_offset : inertp_offset + n_interp_bodies]
-
-        # T[world->body] @ T[body->frame]
-        constraint_transforms_a = vmap(Transform.multiply)(
-            Transform(pos, rot)[:-1], frame_offsets_a
-        )
-        constraint_transforms_b = vmap(Transform.multiply)(
-            Transform(pos, rot)[1:], frame_offsets_b
-        )
-        # One can verify that constraint_transforms_b is (approx) the same as constraint_transforms_a
-        reference_offset = constraint_transforms_a.pos[:, 0]
-
-        # The first and final indices corresponds to the grippers, they only have one relevant frame
-        last_segment_w_marker_id = indices_body[-2]
-        first_segment_w_marker_id = indices_body[1]
-        last_interface_w_marker_id = last_segment_w_marker_id + 1
-        first_interface_w_marker_id = first_segment_w_marker_id - 1
-
-        # The points at which to reconstruct "frame a"s
-        off0a = reference_offset[:last_interface_w_marker_id]
-        off0b = reference_offset[first_interface_w_marker_id:]
-
-        # The points at which the transforms are known
-        off0a_p = reference_offset[jnp.array(indices_body[:-1])]
-        off0b_p = reference_offset[jnp.array(indices_body[1:]) - 1]
-
-        # Begin with just xyz-interpolation
-        from scipy.interpolate import CubicSpline, interp1d
-
-        # Frame A
-        # cs = interp1d(
-        #     off0a_p, transforms[0].pos, kind="linear", axis=0
-        # )
-        cs = CubicSpline(off0a_p, transforms[0].pos)
-        new_pos_a = cs(off0a)
-        new_rot_a = math.quat_interp(off0a, off0a_p, transforms[0].rot)
-        new_transforms_a = Transform(new_pos_a, new_rot_a)
-
-        # T[world->frame] = T[world->body] @ T[body->frame]
-        # which implies
-        # T[world->body] = T[world->frame] @T[frame->body]
-        body_locations_a = vmap(Transform.get_relative)(
-            new_transforms_a, frame_offsets_a[:last_interface_w_marker_id]
-        )
-        # Frame B
-        # cs = interp1d(
-        #     off0b_p, transforms[1].pos, kind="linear", axis=0
-        # )
-        cs = CubicSpline(off0b_p, transforms[1].pos)
-        new_pos_b = cs(off0b)
-        new_rot_b = math.quat_interp(off0b, off0b_p, transforms[1].rot)
-        new_transforms_b = Transform(new_pos_b, new_rot_b)
-
-        # T[w->f] = T[w->b] @ T[b->f]
-        # T[w->b] = T[w->f] @ inv(T[b->f])
-        body_locations_b = vmap(Transform.get_relative)(
-            new_transforms_b, frame_offsets_b[first_interface_w_marker_id:]
-        )
-        a_only_pos = body_locations_a.pos[:first_segment_w_marker_id]
-        a_only_rot = body_locations_a.rot[:first_segment_w_marker_id]
-        a_shared_pos = body_locations_a.pos[first_segment_w_marker_id:]
-        a_shared_rot = body_locations_a.rot[first_segment_w_marker_id:]
-        b_only_pos = body_locations_b.pos[
-            last_segment_w_marker_id - first_segment_w_marker_id + 1 :
-        ]
-        b_only_rot = body_locations_b.rot[
-            last_segment_w_marker_id - first_segment_w_marker_id + 1 :
-        ]
-        b_shared_pos = body_locations_b.pos[
-            : last_segment_w_marker_id - first_segment_w_marker_id + 1
-        ]
-        b_shared_rot = body_locations_b.rot[
-            : last_segment_w_marker_id - first_segment_w_marker_id + 1
-        ]
-
-        shared_pos = (a_shared_pos + b_shared_pos) / 2
-        delta = vmap(math.quat_residual)(b_shared_rot, a_shared_rot)
-        half_step = vmap(math.from_rotation_vector)(0.5 * delta)
-        shared_rot = vmap(math.quat_mul)(half_step, a_shared_rot)
-        interp_pos = jnp.concatenate([a_only_pos, shared_pos, b_only_pos])
-        interp_rot = jnp.concatenate([a_only_rot, shared_rot, b_only_rot])
-
-        new_state = self._place_hidden_links(interp_pos, interp_rot, param, state0)
-
-        return new_state
-
-    def _place_hidden_links(self, interp_pos, interp_rot, param, state):
-        # The configuration of the interpolated segment (DLO are grippers) is now known
-        # The final step is to place the robot arms (hidden links)
-        gripper1_transform = Transform(interp_pos[0], interp_rot[0])
-        gripper2_transform = Transform(interp_pos[-1], interp_rot[-1])
-
-        # TODO: Fix
-        lock_pos1 = -gripper1_transform.pos
-        lock_euler1 = math.quat_to_euler(math.conjugate(gripper1_transform.rot))
-        # lock_euler1 = lock_euler1.at[2].set(-lock_euler1[2])
-        lock1_yaw, lock1_pitch, lock1_roll = lock_euler1
-        lock_euler1 = lock_euler1.at[0].set(-lock1_yaw)
-        lock_euler1 = lock_euler1.at[1].set(lock1_pitch)
-        lock_euler1 = lock_euler1.at[2].set(-lock1_roll)
-
-        lock_pos2 = -gripper2_transform.pos
-        lock_euler2 = math.quat_to_euler(math.conjugate(gripper2_transform.rot))
-        # lock_euler2 = lock_euler2.at[2].set(-lock_euler2[2])
-        # lock_euler2 = lock_euler2.at[1].set(-lock_euler2[1])
-        lock_euler2 = lock_euler2.at[0].set(-lock_euler2[0])
-
-        hidden2a_transform = self.lock_hidden2a_to_gripper1.place_other(
-            5, param, gripper1_transform, -lock_euler1[2]
-        )
-        hidden1a_transform = self.lock_hidden1a_to_hidden2a.place_other(
-            5, param, hidden2a_transform, lock_euler1[1]
-        )
-
-        hidden2b_transform = self.lock_gripper2_to_hidden_link2b.place_other(
-            5, param, gripper2_transform, -lock_euler2[2]
-        )
-        hidden1b_transform = self.lock_hidden2b_to_hidden1b.place_other(
-            5, param, hidden2b_transform, lock_euler2[1]
-        )
-
-        full_pos = jnp.concatenate(
-            [
-                hidden1a_transform.pos[None],
-                hidden2a_transform.pos[None],
-                interp_pos,
-                hidden2b_transform.pos[None],
-                hidden1b_transform.pos[None],
-            ]
-        )
-        full_rot = jnp.concatenate(
-            [
-                hidden1a_transform.rot[None],
-                hidden2a_transform.rot[None],
-                interp_rot,
-                hidden2b_transform.rot[None],
-                hidden1b_transform.rot[None],
-            ]
-        )
-
-        new_conf = Configuration(
-            pos=full_pos,
-            rot=full_rot,
-        )
-
-        new_state = state.replace(conf=new_conf)
-
-        targets = jnp.concatenate(
-            [
-                jnp.concatenate([lock_pos1, lock_euler1]),
-                jnp.concatenate([lock_pos2, lock_euler2]),
-            ]
-        )
-
-        return new_state.replace(lock_targets=targets)
-
-    def convert_body_transforms_to_frame_transforms(
-        self, param: SimulationParameters, body_transforms: Transform
-    ):
-        indices_a = [
-            param.constraint_param.names.index(name)
-            for name in self.env_settings.pose_estimate_constraints_a
-        ]
-        indices_b = [
-            param.constraint_param.names.index(name)
-            for name in self.env_settings.pose_estimate_constraints_b
-        ]
-
-        frame_offsets_a = param.constraint_param.frame_a.as_vectorized_transform()[
-            jnp.array(indices_a)
-        ]
-        frame_offsets_b = param.constraint_param.frame_b.as_vectorized_transform()[
-            jnp.array(indices_b)
-        ]
-
-        constraint_transforms_a = vmap(Transform.multiply)(
-            body_transforms[:-1], frame_offsets_a
-        )
-        constraint_transforms_b = vmap(Transform.multiply)(
-            body_transforms[1:], frame_offsets_b
-        )
-
-        return constraint_transforms_a, constraint_transforms_b
-
-    def relax_shear_displacement(self, state, param):
-        # Simulate the system for a few systems to avoid shear displacement
-        test_param = param.tree_replace(
-            src={
-                "sparse_param.cable_param.youngs_modulus": 1e0,
-                "sparse_param.cable_param.shear_modulus": 1e0,
-                "rigid_body_param.mass": param.rigid_body_param.mass.at[:].set(1e4),
-                "gravity": jnp.array([0.0, 0.0, 0.0]),
-            }
-        )
-        horizon = 10
-        # Simulation loop
-        for i in range(horizon):
-            # Step the environment and store the observation
-            new_state, _ = jax.jit(self.step)(state, jnp.zeros([12]), test_param)
-            new_conf = new_state.conf.replace(pos=state.conf.pos)
-            state = new_state.replace(conf=new_conf)
-
-        return state
+        return DLOState(initial_conf, initial_gvel, targets, multipliers)
 
     def control_help_strings(self):
         return [
@@ -1224,21 +900,9 @@ class DLO(Environment):
         elif key_map["7"]:
             motor6 = -1.0
         motor1_to_6 = jnp.array([-motor1, -motor2, -motor3, motor4, motor5, motor6])
-        motor7_to_12 = jnp.zeros([6])
 
-        control_first = control_state[0]
-        switch_is_down = control_state[1]
-        if key_map["8"] and not switch_is_down:
-            switch_is_down = True
-            control_first = not control_first
-        if not key_map["8"] and switch_is_down:
-            switch_is_down = False
-        if control_first:
-            motor_1_to_12 = jnp.concatenate([motor1_to_6, motor7_to_12])
-        else:
-            motor_1_to_12 = jnp.concatenate([motor7_to_12, motor1_to_6])
-        control_state = (control_first, switch_is_down)
-        return motor_1_to_12, control_state
+        control_state = None
+        return jnp.concatenate([motor1_to_6]), control_state
 
     def get_state_with_floating_markers(
         self, param: SimulationParameters, transforms: Transform

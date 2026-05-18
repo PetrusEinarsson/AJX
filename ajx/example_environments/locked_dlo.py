@@ -130,10 +130,10 @@ class LockedDLO(DLO):
         marker1_local_transform = self.env_settings.pose_estimate_offsets[0]
         marker2_local_transform = self.env_settings.pose_estimate_offsets[-1]
         tool1_to_dlo_frame = Transform(
-            jnp.array([grapple_box_length, 0.0, 0.0]), math.Rotations.unitary
+            jnp.array([grapple_box_length, 0.0, 0.0]), math.Rotations.identity
         )
         tool2_to_dlo_frame = Transform(
-            jnp.array([-grapple_box_length, 0.0, 0.0]), math.Rotations.unitary
+            jnp.array([-grapple_box_length, 0.0, 0.0]), math.Rotations.identity
         )
 
         grip_tool1 = RigidBody(
@@ -168,55 +168,39 @@ class LockedDLO(DLO):
         )
         for i in range(self.env_settings.n_segments):
             frame_a_transform = Transform(
-                jnp.array([bl, 0.0, 0.0]), math.Rotations.unitary
+                jnp.array([bl, 0.0, 0.0]), math.Rotations.identity
             )
             frame_b_transform = Transform(
-                jnp.array([-bl, 0.0, 0.0]), math.Rotations.unitary
+                jnp.array([-bl, 0.0, 0.0]), math.Rotations.identity
             )
-            segment_geometry = [("segment_model", Transform.unitary())]
+            segment_geometry = [("segment_model", Transform.identity())]
             debug_geometry = [
                 ("axes_model", frame_a_transform),
                 ("axes_model", frame_b_transform),
-                ("segment_wireframe_model", Transform.unitary()),
+                ("segment_wireframe_model", Transform.identity()),
             ]
             if f"body{i}" in self.env_settings.pose_estimate_bodies:
                 segment_geometry = [
-                    ("segment_model", Transform.unitary()),
-                    ("marker_model", Transform.unitary()),
+                    ("segment_model", Transform.identity()),
+                    ("marker_model", Transform.identity()),
                 ]
                 debug_geometry = [
                     ("axes_model", frame_a_transform),
                     ("axes_model", frame_b_transform),
-                    ("marker_model", Transform.unitary()),
-                    ("segment_wireframe_model", Transform.unitary()),
+                    ("marker_model", Transform.identity()),
+                    ("segment_wireframe_model", Transform.identity()),
                 ]
 
-            area = jnp.pi * (self.env_settings.radius) ** 2
+            r_o = self.env_settings.outer_radius
+            r_i = self.env_settings.inner_radius
+            length = 2 * self.env_settings.segment_halflength
+            area = jnp.pi * (r_o**2 - r_i**2)
             # Cylinder mass
-            mass_cyl = (
-                self.env_settings.density
-                * area
-                * self.env_settings.segment_halflength
-                * 2
-            )
-            mass_sphere = (
-                self.env_settings.density
-                * 4
-                * jnp.pi
-                * (self.env_settings.radius) ** 3
-                / 3
-            )
-            mass = mass_cyl + mass_sphere
-            inertia_cyl_x = 0.5 * mass * self.env_settings.radius**2
-            inertia_cyl_yz = (
-                1
-                / 12
-                * mass
-                * (
-                    3 * self.env_settings.radius**2
-                    + (self.env_settings.segment_halflength * 2) ** 2
-                )
-            )
+            mass_cyl = self.env_settings.density * area * length * 2
+            mass = mass_cyl
+            inertia_cyl_x = 0.5 * mass * (r_o**2 + r_i**2)
+
+            inertia_cyl_yz = (1.0 / 12.0) * mass * (3 * (r_o**2 + r_i**2) + length**2)
             inertia = jnp.array([inertia_cyl_x, inertia_cyl_yz, inertia_cyl_yz])
 
             arms.append(RigidBody(f"body{i}", segment_geometry, debug_geometry))
@@ -231,11 +215,11 @@ class LockedDLO(DLO):
         self.first_lock = OneBodyConstraint(
             name=f"lock_hidden2a_to_gripper1",
             body="grip_tool1",
-            constraint_type=self.env_settings.constraint_type,
+            constraint_residual=self.env_settings.constraint_residual,
         )
         first_lock_param = ConstraintParameters.create_locked_ext(
-            frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.unitary),
-            frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.unitary),
+            frame_a=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.identity),
+            frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.identity),
             compliance_lin=1e-12,
             compliance_rot=1e-12,
             viscous_compliance_lin=1e-3,
@@ -250,14 +234,14 @@ class LockedDLO(DLO):
                 name=f"lock_gripper1_to_dlo",
                 body_a=f"grip_tool1",
                 body_b=f"body0",
-                constraint_type=self.env_settings.constraint_type,
+                constraint_residual=self.env_settings.constraint_residual,
             )
         )
         # [0.531634 m, -0.008073 m, -79.5134] -> 0.0795
         lock_joint_param.append(
             ConstraintParameters.create_locked(
                 frame_a=Frame(tool1_to_dlo_frame.pos, tool1_to_dlo_frame.rot),
-                frame_b=Frame(jnp.array([-bl, 0.0, 0.0]), math.Rotations.unitary),
+                frame_b=Frame(jnp.array([-bl, 0.0, 0.0]), math.Rotations.identity),
                 compliance=1e-8,
                 viscous_compliance=1e-5,
                 damping=2 * self.reference_timestep,
@@ -271,13 +255,13 @@ class LockedDLO(DLO):
                     name=f"lock{i}",
                     body_a=f"body{i}",
                     body_b=f"body{i+1}",
-                    constraint_type=self.env_settings.constraint_type,
+                    constraint_residual=self.env_settings.constraint_residual,
                 )
             )
             lock_joint_param.append(
                 ConstraintParameters.create_locked(
-                    frame_a=Frame(jnp.array([bl, 0.0, 0.0]), math.Rotations.unitary),
-                    frame_b=Frame(jnp.array([-bl, 0.0, 0.0]), math.Rotations.unitary),
+                    frame_a=Frame(jnp.array([bl, 0.0, 0.0]), math.Rotations.identity),
+                    frame_b=Frame(jnp.array([-bl, 0.0, 0.0]), math.Rotations.identity),
                     compliance=1e-5,
                     viscous_compliance=1e-5,
                     damping=2 * self.reference_timestep,
@@ -290,12 +274,12 @@ class LockedDLO(DLO):
                 name="lock_dlo_to_gripper2",
                 body_a=f"body{self.env_settings.n_segments - 1}",
                 body_b="grip_tool2",
-                constraint_type=self.env_settings.constraint_type,
+                constraint_residual=self.env_settings.constraint_residual,
             )
         )
         lock_joint_param.append(
             ConstraintParameters.create_locked(
-                frame_a=Frame(jnp.array([bl, 0.0, 0.0]), math.Rotations.unitary),
+                frame_a=Frame(jnp.array([bl, 0.0, 0.0]), math.Rotations.identity),
                 frame_b=Frame(tool2_to_dlo_frame.pos, tool2_to_dlo_frame.rot),
                 compliance=1e-8,
                 viscous_compliance=1e-5,
@@ -307,7 +291,7 @@ class LockedDLO(DLO):
         self.last_lock = OneBodyConstraint(
             name=f"lock_gripper2_to_hidden2b",
             body=f"grip_tool2",
-            constraint_type=self.env_settings.constraint_type,
+            constraint_residual=self.env_settings.constraint_residual,
         )
         last_lock_param = ConstraintParameters.create_locked_ext(
             frame_a=Frame(
@@ -318,9 +302,9 @@ class LockedDLO(DLO):
                         0.0,
                     ]
                 ),
-                math.Rotations.unitary,
+                math.Rotations.identity,
             ),
-            frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.unitary),
+            frame_b=Frame(jnp.array([0.0, 0.0, 0.0]), math.Rotations.identity),
             compliance_lin=1e-12,
             compliance_rot=1e-12,
             viscous_compliance_lin=1e-3,
@@ -351,7 +335,8 @@ class LockedDLO(DLO):
             body_offset=1,
             n_segments=self.env_settings.n_segments,
             segment_length=self.env_settings.segment_halflength * 2,
-            radius=self.env_settings.radius,
+            r_outer=self.env_settings.outer_radius,
+            r_inner=self.env_settings.inner_radius,
         )
 
         pre_step_modifiers = (
@@ -402,7 +387,7 @@ class LockedDLO(DLO):
         )
         self.geometry_list = self._create_geometry()
 
-        self.extra_geometry = [("ground", Transform.unitary())]
+        self.extra_geometry = [("ground", Transform.identity())]
 
     def create_neutral_configuration(self, observation, param):
         world_transform = Transform(
@@ -430,7 +415,9 @@ class LockedDLO(DLO):
                 param.constraint_param.frame_a[-1].flatten(),
             ]
         )
-        return DLOState(initial_conf, initial_gvel, targets)
+        multipliers_size = self.get_multiplier_size()
+        multipliers = jnp.zeros([multipliers_size])
+        return DLOState(initial_conf, initial_gvel, targets, multipliers=multipliers)
 
     def control_help_strings(self):
         return []
